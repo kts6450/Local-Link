@@ -1,0 +1,35 @@
+# ── Core STT ──────────────────────────────────────────────
+openai-whisper>=20231117
+transformers>=4.39.0
+accelerate>=0.28.0
+
+# ── Audio Processing ──────────────────────────────────────
+librosa>=0.10.1
+torchaudio>=2.2.0
+soundfile>=0.12.1
+pyaudio>=0.2.14
+
+# ── ML Framework ──────────────────────────────────────────
+torch>=2.2.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+
+# ── Evaluation ────────────────────────────────────────────
+jiwer>=3.0.3          # WER / CER 계산
+
+# ── Data Handling ─────────────────────────────────────────
+datasets>=2.18.0
+pandas>=2.2.0
+tqdm>=4.66.0
+
+# ── Demo App ──────────────────────────────────────────────
+streamlit>=1.33.0
+streamlit-webrtc>=0.47.0
+plotly>=5.20.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# ── Utilities ─────────────────────────────────────────────
+pydantic>=2.6.0
+python-dotenv>=1.0.0
+loguru>=0.7.2
