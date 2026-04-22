@@ -84,7 +84,7 @@ def build_label_index(label_zip_path: Path) -> dict[str, dict]:
     index = {}
     try:
         with zipfile.ZipFile(label_zip_path, "r") as zf:
-            json_entries = [n for n in zf.namelist() if n.endswith(".json")]
+            json_entries = [n for n in zf.namelist() if n.lower().endswith(".json")]
             for name in tqdm(json_entries, desc=f"라벨 인덱스 ({label_zip_path.name})", leave=False):
                 stem = Path(name).stem
                 try:
@@ -109,9 +109,9 @@ def find_label_zip(audio_zip_name: str, label_zip_dir: Path) -> Optional[Path]:
         return None
     category = match.group(1).strip()
 
-    for label_zip in label_zip_dir.glob("*.zip"):
-        if category in label_zip.name and "[라벨]" in label_zip.name:
-            return label_zip
+        for label_zip in label_zip_dir.glob("*.zip"):
+            if "[라벨]" in label_zip.name and category in label_zip.name:
+                return label_zip
     return None
 
 
@@ -200,7 +200,7 @@ def run_preprocessing(
 
     for audio_dir in audio_zip_dirs:
         audio_dir = Path(audio_dir)
-        audio_zips = sorted(audio_dir.rglob("[원천]*.zip"))
+        audio_zips = sorted(p for p in audio_dir.rglob("*.zip") if "[원천]" in p.name)
         logger.info(f"원천 zip {len(audio_zips)}개 발견: {audio_dir}")
 
         for audio_zip in audio_zips:
