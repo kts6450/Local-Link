@@ -132,25 +132,36 @@ def process_zip_pair(
                     continue
 
                 label = label_index[stem]
-                transcript_info = label.get("전사정보", {})
-                transcript = clean_transcript(
-                    transcript_info.get("LabelText",
-                    transcript_info.get("TransLabelText", ""))
-                )
+
+                # 데이터셋 포맷 자동 감지
+                # 포맷 A: 자유대화/명령어(노인) - 발화정보.stt
+                # 포맷 B: 명령어 - 전사정보.LabelText
+                if "발화정보" in label:
+                    transcript = clean_transcript(label["발화정보"].get("stt", ""))
+                    recorder = label.get("녹음자정보", {})
+                    age = int(recorder.get("age", 0))
+                    dialect_info = label.get("대화정보", {})
+                    dialect = parse_dialect(dialect_info.get("cityCode", ""), "")
+                    speaker_id = str(recorder.get("recorderId", stem))
+                else:
+                    transcript_info = label.get("전사정보", {})
+                    transcript = clean_transcript(
+                        transcript_info.get("LabelText",
+                        transcript_info.get("TransLabelText", ""))
+                    )
+                    speaker_info = label.get("화자정보", {})
+                    age = parse_age(speaker_info.get("Age", speaker_info.get("age", "0")))
+                    dialect = parse_dialect(
+                        speaker_info.get("Dialect", ""),
+                        speaker_info.get("Region", ""),
+                    )
+                    speaker_id = str(speaker_info.get("SpeakerName", stem))
+
                 if not transcript:
                     continue
 
-                speaker_info = label.get("화자정보", {})
-                age = parse_age(speaker_info.get("Age", speaker_info.get("age", "0")))
-
                 if min_age > 0 and age < min_age:
                     continue
-
-                dialect = parse_dialect(
-                    speaker_info.get("Dialect", ""),
-                    speaker_info.get("Region", ""),
-                )
-                speaker_id = str(speaker_info.get("SpeakerName", stem))
 
                 # 오디오 길이만 확인 (실제 바이트 로드)
                 with audio_zf.open(wav_name) as wav_file:
