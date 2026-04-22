@@ -56,9 +56,7 @@ with zipfile.ZipFile(LABEL_ZIP, "r") as lzf:
                 print(f"  인코딩: EUC-KR")
             
             print(f"  최상위 키: {list(data.keys())}")
-            if '전사정보' in data:
-                print(f"  전사정보: {data['전사정보']}")
-            if '화자정보' in data:
-                print(f"  화자정보: {data['화자정보']}")
+            for key in data.keys():
+                print(f"  [{key}]: {data[key]}")
         except Exception as e:
             print(f"  오류: {e}")
