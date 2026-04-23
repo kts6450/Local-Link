@@ -245,13 +245,28 @@ def run_preprocessing(
 
 
 if __name__ == "__main__":
-    run_preprocessing(
-        audio_zip_dirs=[
-            r"C:\Users\dns-server2\TTT-Dialect\data\raw\elderly\자유대화 음성(노인남녀)\Training",
-        ],
-        label_zip_dirs=[
-            r"F:\TTT-data\raw\elderly",
-        ],
-        manifest_path=r"F:\TTT-data\processed\elderly_freeconv_train.jsonl",
-        min_age=60,
-    )
+    import sys
+    mode = sys.argv[1] if len(sys.argv) > 1 else "train"
+
+    if mode == "train":
+        run_preprocessing(
+            audio_zip_dirs=[
+                r"C:\Users\dns-server2\TTT-Dialect\data\raw\elderly\자유대화 음성(노인남녀)\Training",
+            ],
+            label_zip_dirs=[
+                r"F:\TTT-data\raw\elderly",
+            ],
+            manifest_path=r"F:\TTT-data\processed\elderly_freeconv_train.jsonl",
+            min_age=60,
+        )
+    elif mode == "val":
+        run_preprocessing(
+            audio_zip_dirs=[
+                r"C:\Users\dns-server2\TTT-Dialect\data\raw\elderly\자유대화 음성(노인남녀)\Validation",
+            ],
+            label_zip_dirs=[
+                r"F:\TTT-data\raw\elderly\validation",
+            ],
+            manifest_path=r"F:\TTT-data\processed\elderly_freeconv_val.jsonl",
+            min_age=60,
+        )
