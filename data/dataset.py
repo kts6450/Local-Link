@@ -262,15 +262,20 @@ def build_dataloaders_from_manifests(
     def _collate(batch):
         return collate_fn(batch, pad_token_id=pad_id)
 
+    pin = num_workers > 0
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,
         collate_fn=_collate, num_workers=num_workers,
+        pin_memory=pin, persistent_workers=(num_workers > 0),
+        prefetch_factor=(2 if num_workers > 0 else None),
     )
     val_loader = DataLoader(
         val_ds, batch_size=batch_size, shuffle=False,
         collate_fn=_collate, num_workers=num_workers,
+        pin_memory=pin, persistent_workers=(num_workers > 0),
+        prefetch_factor=(2 if num_workers > 0 else None),
     )
-    logger.info(f"DataLoader 생성: train={len(train_ds)} / val={len(val_ds)}")
+    logger.info(f"DataLoader 생성: train={len(train_ds)} / val={len(val_ds)} (num_workers={num_workers})")
     return train_loader, val_loader
 
 

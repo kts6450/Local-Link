@@ -79,6 +79,7 @@ class Trainer:
                 val_manifest=self.cfg["val_manifest"],
                 processor=self.model.processor,
                 batch_size=cfg["finetune"]["batch_size"],
+                num_workers=cfg["finetune"].get("num_workers", 2),
             )
         else:
             self.train_loader, self.val_loader, _ = build_dataloaders(

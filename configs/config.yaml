@@ -20,6 +20,7 @@ finetune:
   learning_rate: 5.0e-5
   batch_size: 4
   gradient_accumulation_steps: 4
+  num_workers: 2
   num_epochs: 3
   warmup_ratio: 0.1
   weight_decay: 0.01
