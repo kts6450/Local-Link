@@ -6,8 +6,10 @@ Whisper 입력 형식(log-mel spectrogram + token ids)으로 변환합니다.
 import io
 import json
 import random
+import functools
 import zipfile
 import numpy as np
+import soundfile as sf
 import torch
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader, random_split
@@ -19,16 +21,30 @@ from loguru import logger
 SAMPLE_RATE = 16_000
 
 
+@functools.lru_cache(maxsize=64)
+def _open_zip(zip_path: str) -> zipfile.ZipFile:
+    """zip 파일 핸들을 캐시하여 반복 open 오버헤드 제거"""
+    return zipfile.ZipFile(zip_path, "r")
+
+
 def load_audio_np(path: str, sr: int = SAMPLE_RATE) -> np.ndarray:
-    audio, _ = librosa.load(path, sr=sr, mono=True)
+    audio, orig_sr = sf.read(path, dtype="float32", always_2d=False)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if orig_sr != sr:
+        audio = librosa.resample(audio, orig_sr=orig_sr, target_sr=sr)
     return audio
 
 
 def load_audio_from_zip(zip_path: str, entry: str, sr: int = SAMPLE_RATE) -> np.ndarray:
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        with zf.open(entry) as wav_file:
-            audio_bytes = wav_file.read()
-    audio, _ = librosa.load(io.BytesIO(audio_bytes), sr=sr, mono=True)
+    zf = _open_zip(zip_path)
+    with zf.open(entry) as wav_file:
+        audio_bytes = wav_file.read()
+    audio, orig_sr = sf.read(io.BytesIO(audio_bytes), dtype="float32", always_2d=False)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if orig_sr != sr:
+        audio = librosa.resample(audio, orig_sr=orig_sr, target_sr=sr)
     return audio
 
 

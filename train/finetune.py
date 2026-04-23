@@ -10,8 +10,9 @@ import os
 import yaml
 import torch
 
-# PyTorch 1.12 + CUDA 11.3 환경에서 cuDNN convolution 알고리즘 탐색 실패 방지
-torch.backends.cudnn.enabled = False
+# cuDNN benchmark 모드: 입력 크기에 최적 알고리즘 자동 탐색
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.enabled = True
 from pathlib import Path
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
