@@ -5,9 +5,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    // /api 호출은 FastAPI(8088)로 프록시 — CORS 우회
+    strictPort: false,
+    // /api 호출은 FastAPI(18088)로 프록시 — CORS 우회. Windows에서 8088이
+    // 자주 reserved/blocked 되므로 18088 사용.
     proxy: {
-      "/api": "http://localhost:8088",
+      "/api": "http://127.0.0.1:18088",
     },
   },
 });

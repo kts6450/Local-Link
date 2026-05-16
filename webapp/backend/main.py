@@ -2,7 +2,7 @@
 
 실행:
     cd webapp/backend
-    uvicorn main:app --reload --port 8088
+    uvicorn main:app --reload --port 18088
 
 프로젝트 루트의 .env 파일을 자동으로 로드한다 (ANTHROPIC_API_KEY,
 TTT_ASR_BACKEND, TTT_MODEL_PATH 등). 환경변수가 이미 셸에 있으면
@@ -26,9 +26,10 @@ from routers import catalog, reservation, voice  # noqa: E402  (after load_doten
 app = FastAPI(title="Hades — 어르신 음성 체험 예약")
 
 # 개발 중 Vite (5173) → FastAPI (8088) 크로스 오리진 허용
+# Vite dev server가 5173 점유 시 5174, 5175... 로 fallback 하므로 정규식으로 허용
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):51[0-9]{2}",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

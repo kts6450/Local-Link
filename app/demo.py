@@ -42,7 +42,11 @@ st.set_page_config(
 
 SAMPLE_RATE = 16_000
 PROFILE_DIR = "./data/user_profiles"
-MODEL_CHECKPOINT = "./checkpoints/finetune/best"   # 없으면 베이스 모델 사용
+# 환경변수 TTT_MODEL_PATH로 override 가능 (3-way 비교 시연용)
+# 예: combined → ./model, freeconv_best → ./models_archive/freeconv_best,
+#     base → "" (자동으로 openai/whisper-small)
+import os as _os_for_path
+MODEL_CHECKPOINT = _os_for_path.environ.get("TTT_MODEL_PATH", "./model")
 UI_LOG_PATH = "./evaluation/results/ui_events.csv"
 KIOSK_SCENARIOS = {
     "복지 민원 접수": {
