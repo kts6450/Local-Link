@@ -28,8 +28,20 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Whisper 한국어 노인·방언 파인튜닝")
     parser.add_argument("--config", default="configs/config.yaml")
     parser.add_argument("--manifest", default=None, help="manifest.jsonl 경로")
-    parser.add_argument("--train_manifest", default=None, help="train manifest 경로")
-    parser.add_argument("--val_manifest", default=None, help="val manifest 경로")
+    parser.add_argument(
+        "--train_manifest",
+        "--train-manifest",
+        default=None,
+        dest="train_manifest",
+        help="train manifest 경로",
+    )
+    parser.add_argument(
+        "--val_manifest",
+        "--val-manifest",
+        default=None,
+        dest="val_manifest",
+        help="val manifest 경로",
+    )
     parser.add_argument("--split_dir", default=None, help="고정 분할(train/val/test.jsonl) 디렉토리")
     parser.add_argument("--resume", default=None, help="재시작할 체크포인트 경로")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

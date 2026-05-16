@@ -3,6 +3,10 @@
 실행:
     cd webapp/backend
     uvicorn main:app --reload --port 8088
+
+프로젝트 루트의 .env 파일을 자동으로 로드한다 (ANTHROPIC_API_KEY,
+TTT_ASR_BACKEND, TTT_MODEL_PATH 등). 환경변수가 이미 셸에 있으면
+.env 값보다 우선.
 """
 
 from __future__ import annotations
@@ -33,9 +37,11 @@ _origins = [
     *[o.strip() for o in _extra.split(",") if o.strip()],
 ]
 
+# Vite dev server가 5173 점유 시 5174, 5175… 로 내려가므로 정규식으로 허용
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):51[0-9]{2}",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

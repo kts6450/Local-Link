@@ -21,6 +21,11 @@ DEFAULT_MODEL = "openai/whisper-small"
 TARGET_SR = 16_000
 MAX_NEW_TOKENS = 225
 
+# 짧거나 조용한 오디오는 모델에 보내지 않는다 — Whisper의 알려진
+# hallucination(같은 토큰 무한 반복) 진입점이라서.
+MIN_AUDIO_SECONDS = 0.4
+MIN_AUDIO_RMS = 0.005
+
 
 class ASRBackend(Protocol):
     def transcribe(self, audio: np.ndarray, sr: int = TARGET_SR) -> str: ...
@@ -94,15 +99,25 @@ class WhisperASR:
         self.processor = WhisperProcessor.from_pretrained(path)
         self.model = WhisperForConditionalGeneration.from_pretrained(path).to(self.device)
         self.model.eval()
-        self.forced_decoder_ids = self.processor.get_decoder_prompt_ids(
-            language="ko", task="transcribe"
-        )
+        # transformers 5.x 권장 방식: forced_decoder_ids 대신 generate에
+        # language/task 직접 전달. 학습 시 generation_config의 forced_decoder_ids가
+        # 영어로 박힌 채 저장되는 케이스가 있어 명시적으로 덮어쓴다.
+        self.model.generation_config.forced_decoder_ids = None
         self._torch = torch
         self.model_path = path
 
     def transcribe(self, audio: np.ndarray, sr: int = TARGET_SR) -> str:
         torch = self._torch
         audio_np = _resample_if_needed(audio, sr)
+
+        # 너무 짧거나 거의 무음이면 generate 호출 자체를 스킵 — Whisper의
+        # repetition hallucination("그러니까 그러니까 그러니까…") 진입점 차단.
+        if audio_np.shape[0] < int(MIN_AUDIO_SECONDS * TARGET_SR):
+            return ""
+        rms = float(np.sqrt(np.mean(audio_np * audio_np)))
+        if rms < MIN_AUDIO_RMS:
+            return ""
+
         feat = self.processor.feature_extractor(
             audio_np,
             sampling_rate=TARGET_SR,
@@ -111,8 +126,18 @@ class WhisperASR:
         with torch.no_grad():
             ids = self.model.generate(
                 feat,
-                forced_decoder_ids=self.forced_decoder_ids,
+                language="ko",
+                task="transcribe",
                 max_new_tokens=MAX_NEW_TOKENS,
+                # repetition 무한 루프 방지 (학습 epoch 부족 시 자주 발생)
+                no_repeat_ngram_size=3,
+                repetition_penalty=1.2,
+                # Whisper 표준 fallback ladder: 결과가 너무 반복적이거나
+                # 평균 logprob이 낮으면 temperature를 올려가며 재시도.
+                temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+                compression_ratio_threshold=1.8,
+                logprob_threshold=-1.0,
+                no_speech_threshold=0.6,
             )
         return self.processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
 

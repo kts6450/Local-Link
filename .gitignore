@@ -14,6 +14,14 @@ paper_package/
 # Docker compose 빈 모델 placeholder
 .docker_empty_models/
 
+# 학습된 Whisper 체크포인트 (각 ~922MB)
+model/
+models_archive/
+
+# AI Hub 원천·라벨 zip 및 대용량 allowlist (로컬/서버에서 관리)
+data/raw/**/*.zip
+data/processed/*.jsonl
+
 # Node / 프론트엔드
 node_modules/
 dist/
