@@ -62,6 +62,14 @@ def _seller_system() -> str:
 7. max_guests — 숙박이면 몇 명까지인지. 상품이면 비움.
 
 하나씩만 묻고, 다 모이면 "이대로 올릴까요?" 하고 확인하세요.
+
+## 음성으로 화면 도우미 (intent)
+- 사용자가 "AI로 글 써줘", "소개 글 만들어줘", "설명 써줘" → intent=ai_write (ready_to_confirm=false).
+  답변: "네, 소개 글을 AI로 채울게요." 처럼 짧게.
+- "사진 만들어줘", "대표 사진", "이미지 그려줘" → intent=ai_image (ready_to_confirm=false).
+  이름(title)이 없으면 먼저 이름을 물어보세요.
+- "설명만 짧게" → intent=ai_write (짧은 설명만 원함을 slots에 반영할 필요 없음).
+
 참고로 지금 등록된 다른 물건은 다음과 같습니다.
 {_listing_block()}
 """
@@ -100,7 +108,7 @@ _SELLER_SLOT_SCHEMA = {
     "properties": {
         "intent": {
             "type": "string",
-            "enum": ["register", "confirm", "ask_help", "smalltalk", "other"],
+            "enum": ["register", "confirm", "ai_write", "ai_image", "ask_help", "smalltalk", "other"],
         },
         "listing_type": {"type": ["string", "null"], "description": "product or lodging"},
         "title": {"type": ["string", "null"]},
@@ -297,10 +305,43 @@ def _seller_format_summary(slots: dict) -> str:
     )
 
 
+def _seller_voice_command(user_text: str) -> str | None:
+    t = (user_text or "").strip()
+    if re.search(r"AI|인공지능|글\s*써|소개\s*글|설명\s*써|설명\s*만들|한번에\s*써", t):
+        return "ai_write"
+    if re.search(r"사진|이미지|그림|대표\s*사진", t) and re.search(
+        r"만들|그려|생성|찍|그려줘|만들어", t
+    ):
+        return "ai_image"
+    return None
+
+
 def seller_offline_turn(user_text: str, history: list[dict]) -> dict:
     """API 키 없을 때 판매자 음성만 규칙으로 처리 (Zero UI 데모 가능)."""
+    cmd = _seller_voice_command(user_text)
     blob = _user_utterances_blob(history, user_text)
     slots = _seller_rule_slots_from_blob(blob)
+    if cmd == "ai_write":
+        return {
+            "reply": "네, AI로 소개 글을 채울게요. 잠시만 기다려 주세요.",
+            "slots": slots,
+            "intent": "ai_write",
+            "ready_to_confirm": False,
+        }
+    if cmd == "ai_image":
+        if not str(slots.get("title", "")).strip():
+            return {
+                "reply": "사진을 만들려면 먼저 물건 이름을 말씀해 주세요.",
+                "slots": slots,
+                "intent": "register",
+                "ready_to_confirm": False,
+            }
+        return {
+            "reply": "네, 대표 사진을 AI로 만들게요. 잠시만 기다려 주세요.",
+            "slots": slots,
+            "intent": "ai_image",
+            "ready_to_confirm": False,
+        }
     complete = _seller_slots_complete(slots)
     affirm = _is_affirmation(user_text)
     prompted = _seller_prompted_confirm(history)

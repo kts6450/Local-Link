@@ -13,24 +13,17 @@ __pycache__
 .venv
 venv
 
-# 데이터/체크포인트는 볼륨 마운트로 주입 (이미지에 굽지 않음)
-# 주의: `data`만 쓰면 webapp/backend/data까지 무시되므로 루트만 지정
-/data
-/checkpoints
-evaluation/results
-paper_package
-notebooks
+# 체크포인트는 볼륨 마운트 (이미지에 미포함)
+/models
+.docker_empty_models
 
-# 데모와 무관한 학습 코드 (필요 없으면 제외해도 OK — 우선 다 포함)
-# train, models 는 demo/asr.py가 의존하지 않으므로 미포함
-
-# 테스트는 이미지에 안 넣음 (런타임 무관)
-demo/tests
-
-# 프론트 — 이미지 안에서 npm ci 로 설치
+# 프론트
 webapp/frontend/node_modules
 webapp/frontend/dist
 
 # OS
 .DS_Store
 Thumbs.db
+
+# 로컬 secrets
+.env

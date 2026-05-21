@@ -23,14 +23,11 @@ services:
         "--reload",
         "--reload-dir",
         "/app/webapp/backend",
-        "--reload-dir",
-        "/app/demo",
       ]
     volumes:
       - ${TTT_MODEL_DIR:-./.docker_empty_models}:/models:ro
       - marketplace-data:/app/webapp/backend/data/runtime
       - ./webapp/backend:/app/webapp/backend
-      - ./demo:/app/demo
 
   # 개발 중에는 nginx 프론트 컨테이너를 켜지 않아도 됨(포트 충돌 방지).
   # 호스트에서 `npm run dev` 로 대체하는 것을 권장합니다.

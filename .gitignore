@@ -1,40 +1,22 @@
 __pycache__/
 *.py[cod]
 *.so
-
 .DS_Store
 
-evaluation/results/
-data/user_profiles/
-paper_package/
-
-# 로컬 환경변수 (API 키 포함 가능 — git에 올리지 않음)
 .env
-
-# Docker compose 빈 모델 placeholder
 .docker_empty_models/
 
-# 학습된 Whisper 체크포인트 (각 ~922MB)
-model/
-models_archive/
+# 파인튜닝 체크포인트 (로컬·볼륨 마운트, git 제외)
+models/inference/*
+!models/inference/README.md
 
-# AI Hub 원천·라벨 zip 및 대용량 allowlist (로컬/서버에서 관리)
-data/raw/**/*.zip
-data/processed/*.jsonl
-
-# Node / 프론트엔드
 node_modules/
 dist/
 .vite/
 *.log
-npm-debug.log*
 
-# IDE
 .vscode/
 .idea/
-
-# 마켓플레이스 런타임 데이터 (로컬/Docker 볼륨)
-webapp/backend/data/runtime/
-
-# Claude Code 로컬 설정
 .claude/
+
+webapp/backend/data/runtime/

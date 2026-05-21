@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { startRecording } from "../lib/recorder";
 import { useAuthSellerId, useAuthSellerSector } from "../store/auth";
 import { useConversation, WELCOME_SELLER } from "../store/conversation";
+import { useSellerFormVoice } from "../store/sellerFormVoice";
 
 /**
  * 판매자 Zero UI — 음성으로 상품·숙박 등록
@@ -69,6 +70,13 @@ export function useVoiceSession() {
       appendAssistant(result.reply);
       mergeSlots(result.slots);
       setReadyToConfirm(result.ready_to_confirm);
+
+      const intent = result.intent || voiceIntentFromText(result.user_text);
+      if (intent === "ai_write") {
+        await useSellerFormVoice.getState().runAction("ai_write");
+      } else if (intent === "ai_image") {
+        await useSellerFormVoice.getState().runAction("ai_image");
+      }
 
       const merged = useConversation.getState().slots;
 
@@ -182,6 +190,15 @@ export function useVoiceSession() {
   }, [phase, begin, finish]);
 
   return { toggle, phase };
+}
+
+function voiceIntentFromText(text: string): string | null {
+  const t = (text || "").trim();
+  if (/AI|글\s*써|소개\s*글|설명\s*써|설명\s*만들|한번에\s*써/i.test(t)) return "ai_write";
+  if (/(사진|이미지|그림|대표\s*사진)/i.test(t) && /(만들|그려|생성|찍)/i.test(t)) {
+    return "ai_image";
+  }
+  return null;
 }
 
 function playTTS(url: string, ref: MutableRefObject<HTMLAudioElement | null>) {

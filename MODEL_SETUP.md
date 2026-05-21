@@ -1,6 +1,6 @@
 # 음성 ASR: 학습 모델만 넣으면 끝나게 하기
 
-로컬링크 웹앱은 Hugging Face 형식의 **Whisper 체크포인트 디렉터리**를 넣고 환경 변수만 맞추면 `demo/asr.py` → 백엔드 `/api/voice/turn`까지 같은 경로로 추론합니다.
+로컬링크 웹앱은 Hugging Face 형식의 **Whisper 체크포인트**를 `.env`의 `TTT_MODEL_PATH`로 지정하면 `webapp/backend/services/whisper_asr.py`에서 로드합니다.
 
 ## 1. 체크포인트에 꼭 있어야 하는 것
 
@@ -54,6 +54,6 @@ TTT_ASR_BACKEND=dummy
 
 ## 5. 참고 코드
 
-- 경로 해석·폴백: `demo/asr.py` 의 `_resolve_model_path`, `describe_asr_for_status`
+- 경로 해석·폴백: `webapp/backend/services/whisper_asr.py`
 - 상태 JSON: `GET /api/voice/status`
 - Compose 마운트: `docker-compose.yml` 의 `TTT_MODEL_DIR` → `/models`

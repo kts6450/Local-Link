@@ -1,4 +1,4 @@
-# 로컬링크 Local Link — API (FastAPI + demo/asr.py, CPU)
+# 로컬링크 Local Link — API (FastAPI + Whisper ASR, CPU)
 # 빌드: 저장소 루트에서 docker compose build hades-backend
 
 FROM python:3.12-slim
@@ -17,7 +17,6 @@ RUN pip install --no-cache-dir \
 COPY webapp/backend/requirements.txt /tmp/requirements-backend.txt
 RUN pip install --no-cache-dir -r /tmp/requirements-backend.txt
 
-COPY demo /app/demo
 COPY webapp/backend /app/webapp/backend
 
 WORKDIR /app/webapp/backend

@@ -33,7 +33,7 @@ webapp/
 
 ```bash
 # 저장소 루트에서 (최초 1회)
-./scripts/setup-env.sh
+./setup-env.sh
 # → .env 생성 후 편집기로 ANTHROPIC_API_KEY, OPENAI_API_KEY 붙여넣기
 ```
 
