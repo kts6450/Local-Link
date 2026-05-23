@@ -149,7 +149,8 @@ export function CheckoutPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto space-y-8">
+    <div className="page-shell py-8 sm:py-10">
+    <div className="max-w-4xl mx-auto space-y-8">
       <div>
         <h1 className="text-3xl font-bold text-hades-text">장바구니 · 결제</h1>
         <p className="mt-2 text-hades-muted text-lg">
@@ -258,6 +259,7 @@ export function CheckoutPage() {
           </form>
         </>
       )}
+    </div>
     </div>
   );
 }

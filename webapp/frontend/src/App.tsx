@@ -36,7 +36,7 @@ export default function App() {
       </Route>
 
       <Route path="seller" element={<SellerLayout />}>
-        <Route index element={<Navigate to="products" replace />} />
+        <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<SellerDashboardPage />} />
         <Route path="products" element={<SellerProductsPage />} />
         <Route path="sns" element={<SellerSnsPage />} />

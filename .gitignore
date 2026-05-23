@@ -9,10 +9,13 @@ __pycache__/
 # 파인튜닝 체크포인트 (로컬·볼륨 마운트, git 제외)
 models/inference/*
 !models/inference/README.md
+model/
+models_archive/
 
 node_modules/
 dist/
 .vite/
+*.tsbuildinfo
 *.log
 
 .vscode/

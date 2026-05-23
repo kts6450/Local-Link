@@ -12,6 +12,7 @@ import type {
   VoiceStatus,
   VoiceTurnResponse,
 } from "../types";
+import type { ListingTab, OcrListingDraft } from "./listingTabs";
 
 const FETCH_DEADLINE_MS = 18_000;
 
@@ -178,6 +179,10 @@ export const api = {
       paid_count: number;
       revenue_total: number;
       units_total: number;
+      today_revenue: number;
+      today_order_count: number;
+      pending_count: number;
+      sales_by_listing: Record<string, number>;
       top_items: { listing_id: string; title: string; units: number; revenue: number }[];
       low_stock: { listing_id: string; title: string; stock: number | null }[];
       revenue_by_day: { date: string; revenue: number }[];
@@ -294,6 +299,9 @@ export const api = {
     }
     return res.json();
   },
+
+  ocrListingDraft: (body: { images_base64: string[]; hint_tab?: ListingTab }) =>
+    postJson<OcrListingDraft>("/api/marketplace/ocr/listing-draft", body),
 
   draftListingDescription: async (body: {
     kind: "product" | "lodging";
@@ -455,18 +463,34 @@ export const api = {
   voiceTurn: async (
     audio: Blob,
     history: Turn[],
-    mode: VoiceMode
+    mode: VoiceMode,
+    timeoutMs = 120_000
   ): Promise<VoiceTurnResponse> => {
     const fd = new FormData();
     fd.append("audio", audio, "speech.wav");
     fd.append("history", JSON.stringify(history));
     fd.append("mode", mode);
-    const res = await fetch("/api/voice/turn", { method: "POST", body: fd });
-    if (!res.ok) {
-      const detail = await res.text();
-      throw new Error(`voiceTurn ${res.status}: ${detail}`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch("/api/voice/turn", {
+        method: "POST",
+        body: fd,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`voiceTurn ${res.status}: ${detail}`);
+      }
+      return res.json();
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") {
+        throw new Error("음성 처리 시간이 길어졌어요. 잠시 후 다시 말씀해 주세요.");
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
     }
-    return res.json();
   },
 
   textTurn: async (

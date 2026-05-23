@@ -2,14 +2,32 @@ import { ConversationView } from "../ConversationView";
 import { MicButton } from "../MicButton";
 import { useSellerFormVoice } from "../../store/sellerFormVoice";
 
+import type { ListingTab } from "../../lib/listingTabs";
+
 const VOICE_BY_STEP: Record<number, string[]> = {
-  1: ["상품 팔아요", "민박 빌려줘요", "올해 햅쌀 십 키로, 만 이천 원"],
+  1: [
+    "올해 햅쌀 십 키로, 만 이천 원",
+    "바닷가 민박 하룻밤 삼만 원",
+    "갯벌 체험 두 시간, 인당 이만 원",
+  ],
   2: ["AI로 글 써줘", "소개 글 만들어 줘", "설명만 짧게"],
   3: ["대표 사진 만들어 줘", "바다에서 낚시하는 사진"],
   4: ["이대로 올려 주세요", "네, 올려요"],
 };
 
-export function SellerVoicePanel({ step }: { step: number }) {
+const TAB_HINT: Record<ListingTab, string> = {
+  product: "특산품·농산물",
+  lodging: "민박·펜션·숙박",
+  experience: "체험·투어·낚시",
+};
+
+export function SellerVoicePanel({
+  step,
+  listingTab,
+}: {
+  step: number;
+  listingTab: ListingTab;
+}) {
   const lastAction = useSellerFormVoice((s) => s.lastAction);
   const hints = VOICE_BY_STEP[step] ?? VOICE_BY_STEP[1];
 
@@ -21,7 +39,9 @@ export function SellerVoicePanel({ step }: { step: number }) {
         </span>
         <div>
           <h2 className="text-lg font-bold text-slate-900">말로 하기</h2>
-          <p className="text-sm text-slate-600">마이크만 누르고 편하게 말씀하세요</p>
+          <p className="text-sm text-slate-600">
+            {TAB_HINT[listingTab]} · 마이크만 누르고 말씀하세요
+          </p>
         </div>
       </div>
 

@@ -21,6 +21,7 @@ from services.listing_ai import (
     is_openai_configured,
 )
 from services.listing_package import generate_listing_package
+from services.note_ocr import parse_note_images
 from services.listing_photos import (
     add_photo,
     delete_photo,
@@ -314,6 +315,39 @@ def post_draft_image(body: DraftImageBody):
         "mime_type": "image/png",
         "prompt_used": prompt_used,
     }
+
+
+class OcrListingDraftBody(BaseModel):
+    images_base64: list[str] = Field(min_length=1, max_length=5)
+    hint_tab: str | None = Field(
+        default=None,
+        description="product | lodging | experience — 셀러가 선택한 탭 힌트",
+    )
+
+    @field_validator("hint_tab")
+    @classmethod
+    def _hint_ok(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
+        if v not in ("product", "lodging", "experience"):
+            raise ValueError("hint_tab must be product, lodging, or experience")
+        return v
+
+
+@router.post("/ocr/listing-draft")
+def post_ocr_listing_draft(
+    body: OcrListingDraftBody,
+    user: dict = Depends(get_current_user),
+):
+    """수기 메모 사진 OCR → 상품·숙박·체험 등록 폼 초안."""
+    if user.get("role") not in ("seller", "master"):
+        raise HTTPException(status_code=403, detail="공급자 로그인이 필요합니다.")
+    try:
+        return parse_note_images(body.images_base64, hint_tab=body.hint_tab)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"OCR 실패: {e}") from e
 
 
 @router.get("/covers/{listing_id}")

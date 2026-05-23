@@ -6,9 +6,9 @@ import base64
 import json
 import os
 
-import anthropic
 import httpx
 
+from services.agent_pipeline import audit_listing_copy, verify_image_prompt_a2a
 from services.llm import DEFAULT_MODEL
 
 _DEFAULT_IMAGE_SIZE = "1024x1024"
@@ -17,11 +17,15 @@ _DEFAULT_IMAGE_MODELS = ("dall-e-2", "dall-e-3", "gpt-image-1")
 
 
 def _openai_api_key() -> str:
-    return (os.environ.get("OPENAI_API_KEY") or "").strip()
+    from services.api_keys import primary_openai_key
+
+    return primary_openai_key()
 
 
 def is_openai_configured() -> bool:
-    return bool(_openai_api_key())
+    from services.api_keys import is_openai_configured as _configured
+
+    return _configured()
 
 
 def image_models_to_try() -> list[str]:
@@ -49,7 +53,9 @@ def generate_listing_description(
     title = (title or "").strip()
     if not title:
         return "상품 이름을 먼저 적어 주세요."
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    from services.api_keys import anthropic_messages_create, anthropic_response_text, is_anthropic_configured
+
+    if not is_anthropic_configured():
         return _fallback_description(kind, title, price, location)
 
     kind_ko = "숙박·민박" if kind == "lodging" else "농산·특산품 등 상품"
@@ -68,8 +74,7 @@ def generate_listing_description(
 - 지역 특색은 부드럽게 한 번만 언급해도 됨.
 """
 
-    client = anthropic.Anthropic()
-    response = client.messages.create(
+    response = anthropic_messages_create(
         model=DEFAULT_MODEL,
         max_tokens=400,
         system="너는 시골·농어촌 소상공인을 돕는 카피라이터다.",
@@ -77,7 +82,8 @@ def generate_listing_description(
         thinking={"type": "disabled"},
         output_config={"effort": "low"},
     )
-    text = next(b.text for b in response.content if b.type == "text").strip()
+    text = anthropic_response_text(response)
+    text = audit_listing_copy(text, title=title, price=price, location=location)
     return text or _fallback_description(kind, title, price, location)
 
 
@@ -199,6 +205,8 @@ def enhance_image_prompt(
     user_hint: str = "",
 ) -> dict:
     """짧은 한국어 입력 → DALL·E용 영문 프롬프트 (Claude 또는 규칙)."""
+    from services.api_keys import anthropic_messages_create, anthropic_response_text, is_anthropic_configured
+
     title = (title or "").strip()
     if not title:
         return {"prompt_en": "", "summary_ko": "상품 이름을 먼저 적어 주세요."}
@@ -208,7 +216,7 @@ def enhance_image_prompt(
     hint = (user_hint or "").strip()
     exp = _is_experience(title, desc, category)
 
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    if not is_anthropic_configured():
         prompt_en = _fallback_enhance_prompt(
             kind, title, location, category, desc, hint
         )
@@ -238,8 +246,7 @@ def enhance_image_prompt(
 5. JSON만 출력: {{"prompt_en":"...", "summary_ko":"한국어로 1문장 요약"}}
 """
 
-    client = anthropic.Anthropic()
-    response = client.messages.create(
+    response = anthropic_messages_create(
         model=DEFAULT_MODEL,
         max_tokens=500,
         system="You output only valid JSON for image generation prompts.",
@@ -247,7 +254,7 @@ def enhance_image_prompt(
         thinking={"type": "disabled"},
         output_config={"effort": "low"},
     )
-    text = next(b.text for b in response.content if b.type == "text").strip()
+    text = anthropic_response_text(response)
 
     try:
         if "```" in text:
@@ -258,19 +265,51 @@ def enhance_image_prompt(
         prompt_en = str(data.get("prompt_en", "")).strip()
         summary_ko = str(data.get("summary_ko", "")).strip()
         if prompt_en:
-            return {"prompt_en": prompt_en[:3800], "summary_ko": summary_ko or "프롬프트를 다듬었습니다."}
+            verified, img_meta = verify_image_prompt_a2a(
+                prompt_en,
+                kind=kind,
+                title=title,
+                description=desc,
+                category=category,
+            )
+            summary = summary_ko or "프롬프트를 다듬었습니다."
+            if img_meta.get("steps"):
+                summary += " (장면 검수 완료)"
+            return {
+                "prompt_en": verified[:3800],
+                "summary_ko": summary,
+                "image_pipeline": img_meta,
+            }
     except json.JSONDecodeError:
         pass
 
     prompt_en = _fallback_enhance_prompt(kind, title, location, category, desc, hint)
-    return {"prompt_en": prompt_en, "summary_ko": "자동으로 장면을 맞춰 적었습니다."}
+    verified, img_meta = verify_image_prompt_a2a(
+        prompt_en, kind=kind, title=title, description=desc, category=category
+    )
+    return {
+        "prompt_en": verified,
+        "summary_ko": "자동으로 장면을 맞춰 적었습니다.",
+        "image_pipeline": img_meta,
+    }
 
 
-def _openai_client():
-    from openai import OpenAI
+def _openai_client(*, key_index: int = 0):
+    from services.api_keys import openai_client
 
-    # OPENAI_API_KEY, OPENAI_BASE_URL(선택) — SDK 표준 환경변수
-    return OpenAI(api_key=_openai_api_key())
+    return openai_client(key_index=key_index)
+
+
+def _is_retryable_openai_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return (
+        "connection" in msg
+        or "timeout" in msg
+        or "503" in msg
+        or "502" in msg
+        or "429" in msg
+        or "rate limit" in msg
+    )
 
 
 def _model_unavailable(exc: BaseException) -> bool:
@@ -349,7 +388,6 @@ def generate_listing_cover_png(
     if not is_openai_configured():
         raise RuntimeError("OPENAI_API_KEY missing")
 
-    client = _openai_client()
     if (prompt_en or "").strip():
         prompt = prompt_en.strip()[:3800]
     else:
@@ -358,15 +396,20 @@ def generate_listing_cover_png(
         )
     models = image_models_to_try()
     last_error: BaseException | None = None
+    from services.api_keys import openai_keys
 
-    for model in models:
-        try:
-            result = _generate_image(client, model, prompt)
-            return _bytes_from_image_response(result), prompt
-        except Exception as e:
-            last_error = e
-            if _model_unavailable(e) and model != models[-1]:
-                continue
-            raise
+    for key_i in range(len(openai_keys()) or 1):
+        client = _openai_client(key_index=key_i)
+        for model in models:
+            try:
+                result = _generate_image(client, model, prompt)
+                return _bytes_from_image_response(result), prompt
+            except Exception as e:
+                last_error = e
+                if _model_unavailable(e) and model != models[-1]:
+                    continue
+                if _is_retryable_openai_error(e):
+                    break
+                break
 
     raise RuntimeError(f"이미지 생성 실패: {last_error}")

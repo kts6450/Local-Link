@@ -58,6 +58,19 @@ def dashboard(user: dict = Depends(get_current_user)):
             if created in by_day:
                 by_day[created] += line
 
+    today_str = today.isoformat()
+    today_revenue = by_day.get(today_str, 0)
+    today_order_count = sum(
+        1 for o in orders if (o.get("created_at") or "")[:10] == today_str
+    )
+    pending_count = sum(
+        1
+        for o in orders
+        if o.get("payment_status") == "paid"
+        and (o.get("fulfillment_status") or "pending") in ("pending", "preparing")
+    )
+    by_listing_sales = {lid: v["units"] for lid, v in by_listing.items()}
+
     listing_index = {l["id"]: l for l in listings}
     top_items = sorted(
         [
@@ -91,6 +104,10 @@ def dashboard(user: dict = Depends(get_current_user)):
         "paid_count": len(paid_orders),
         "revenue_total": revenue_total,
         "units_total": units_total,
+        "today_revenue": today_revenue,
+        "today_order_count": today_order_count,
+        "pending_count": pending_count,
+        "sales_by_listing": by_listing_sales,
         "top_items": top_items,
         "low_stock": low_stock,
         "revenue_by_day": [{"date": d, "revenue": by_day[d]} for d in days_window],

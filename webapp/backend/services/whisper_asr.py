@@ -16,6 +16,20 @@ DEFAULT_MODEL = "openai/whisper-small"
 TARGET_SR = 16_000
 MAX_NEW_TOKENS = 225
 
+# 저장소 models/inference/* junction → model/ · models_archive/
+MODEL_PRESETS: dict[str, str] = {
+    "base": DEFAULT_MODEL,
+    "elderly_command": "models/inference/elderly_command",
+    "gangwon": "models/inference/gangwon",
+    "combined": "models/inference/combined",
+}
+
+
+def _project_root() -> "Path":
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[3]
+
 MIN_AUDIO_SECONDS = 0.4
 MIN_AUDIO_RMS = 0.005
 
@@ -50,13 +64,26 @@ def _pick_device() -> str:
     return "cpu"
 
 
+def _effective_model_raw_from_env() -> str:
+    explicit = (os.environ.get("TTT_MODEL_PATH") or "").strip()
+    if explicit:
+        return explicit
+    preset_id = (os.environ.get("TTT_MODEL_ID") or "").strip().lower()
+    if preset_id in MODEL_PRESETS:
+        return MODEL_PRESETS[preset_id]
+    return DEFAULT_MODEL
+
+
 def _resolve_model_path(raw: str) -> str:
     from pathlib import Path
 
-    if "/" in raw and not raw.startswith(("/", ".")) and not (len(raw) > 2 and raw[1] == ":"):
+    if _is_hub_model_id(raw):
         return raw
 
     p = Path(raw)
+    if not p.is_absolute():
+        p = (_project_root() / p).resolve()
+
     if not p.exists():
         return DEFAULT_MODEL
 
@@ -65,7 +92,7 @@ def _resolve_model_path(raw: str) -> str:
     if not (has_config and has_preproc):
         return DEFAULT_MODEL
 
-    return raw
+    return str(p)
 
 
 class WhisperASR:
@@ -73,7 +100,7 @@ class WhisperASR:
         import torch
         from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-        raw = model_path or os.environ.get("TTT_MODEL_PATH") or DEFAULT_MODEL
+        raw = model_path or _effective_model_raw_from_env()
         path = _resolve_model_path(raw)
         self.device = device or _pick_device()
         self.processor = WhisperProcessor.from_pretrained(path)
@@ -104,12 +131,6 @@ class WhisperASR:
                 language="ko",
                 task="transcribe",
                 max_new_tokens=MAX_NEW_TOKENS,
-                no_repeat_ngram_size=3,
-                repetition_penalty=1.2,
-                temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
-                compression_ratio_threshold=1.8,
-                logprob_threshold=-1.0,
-                no_speech_threshold=0.6,
             )
         return self.processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
 
@@ -133,13 +154,10 @@ def get_asr() -> ASRBackend:
     return WhisperASR()
 
 
-def _effective_model_raw_from_env() -> str:
-    return (os.environ.get("TTT_MODEL_PATH") or "").strip() or DEFAULT_MODEL
-
-
 def describe_asr_for_status() -> dict:
     backend_env = (os.environ.get("TTT_ASR_BACKEND") or "whisper").lower()
     env_path = (os.environ.get("TTT_MODEL_PATH") or "").strip()
+    env_preset = (os.environ.get("TTT_MODEL_ID") or "").strip()
 
     if backend_env == "dummy":
         get_asr()
@@ -148,7 +166,9 @@ def describe_asr_for_status() -> dict:
             "asr_is_dummy": True,
             "env_ttt_asr_backend": os.environ.get("TTT_ASR_BACKEND", ""),
             "env_ttt_model_path": env_path,
+            "env_ttt_model_id": env_preset,
             "model_requested": env_path or None,
+            "model_presets": MODEL_PRESETS,
             "model_resolved_before_load": None,
             "model_loaded_path": None,
             "device": None,
@@ -189,7 +209,9 @@ def describe_asr_for_status() -> dict:
         "asr_is_dummy": is_dummy,
         "env_ttt_asr_backend": os.environ.get("TTT_ASR_BACKEND", ""),
         "env_ttt_model_path": env_path,
+        "env_ttt_model_id": env_preset,
         "model_requested": requested,
+        "model_presets": MODEL_PRESETS,
         "model_resolved_before_load": resolved_preview,
         "model_loaded_path": loaded_path,
         "device": device,
@@ -199,8 +221,11 @@ def describe_asr_for_status() -> dict:
 
 
 def _is_hub_model_id(raw: str) -> bool:
-    return bool(
-        "/" in raw
-        and not raw.startswith(("/", "."))
-        and not (len(raw) > 2 and raw[1] == ":")
-    )
+    if not raw or "/" not in raw or "\\" in raw:
+        return False
+    if raw.startswith(("/", ".", "~")):
+        return False
+    if len(raw) > 2 and raw[1] == ":":
+        return False
+    parts = raw.split("/")
+    return len(parts) == 2 and all(parts)

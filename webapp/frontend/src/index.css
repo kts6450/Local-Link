@@ -18,7 +18,7 @@
 
 @layer components {
   .card {
-    @apply bg-white border border-hades-line rounded-2xl shadow-card;
+    @apply bg-white border border-brand-line rounded-3xl shadow-card;
   }
 
   .input-field {
@@ -32,8 +32,8 @@
   }
 
   .btn-primary {
-    @apply bg-shop-teal text-white font-bold rounded-xl px-6 py-3
-           hover:bg-shop-tealHover transition-colors disabled:opacity-50 shadow-sm;
+    @apply bg-brand-ink text-white font-bold rounded-full px-6 py-3
+           hover:bg-brand-ink/90 transition-colors disabled:opacity-50 shadow-sm;
   }
 
   .btn-ghost {
@@ -52,12 +52,12 @@
   }
 
   .chip {
-    @apply px-4 py-2 rounded-full text-sm font-semibold border border-hades-line
-           bg-white text-slate-700 transition-colors hover:border-shop-teal/40;
+    @apply px-4 py-2 rounded-full text-sm font-semibold border border-brand-line
+           bg-white text-brand-ink transition-colors hover:bg-brand-warm;
   }
 
   .chip-active {
-    @apply chip bg-shop-teal border-shop-teal text-white shadow-sm hover:border-shop-teal;
+    @apply chip bg-brand-ink border-brand-ink text-white shadow-sm hover:bg-brand-ink;
   }
 
   .page-title {
@@ -66,5 +66,16 @@
 
   .page-lead {
     @apply mt-2 text-hades-muted leading-relaxed max-w-2xl;
+  }
+
+  .page-shell {
+    @apply w-full px-5 sm:px-8 lg:px-10 xl:px-14 2xl:px-20;
+  }
+
+  .full-bleed {
+    width: 100vw;
+    max-width: 100vw;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
   }
 }

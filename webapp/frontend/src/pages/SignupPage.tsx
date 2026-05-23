@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../lib/api";
+import { LocalLinkLogo } from "../components/brand/LocalLinkLogo";
 import { LISTING_CATEGORIES, type ListingCategory } from "../lib/sellerSectors";
 import { useAuth } from "../store/auth";
 
@@ -48,11 +49,7 @@ export function SignupPage() {
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
       <aside className="lg:w-[42%] bg-gradient-to-br from-shop-teal via-shop-tealDark to-brand-greenDark text-white px-8 py-12 lg:py-16 flex flex-col justify-center">
-        <img
-          src="/logo-local-link.png"
-          alt=""
-          className="h-11 w-auto object-contain brightness-0 invert opacity-95"
-        />
+        <LocalLinkLogo variant="inverse" size="lg" />
         <h1 className="mt-10 text-3xl sm:text-4xl font-bold leading-tight tracking-tight">
           로컬링크 회원가입
         </h1>

@@ -230,7 +230,7 @@ export function ListingDetailPage() {
   const nights = checkIn && checkOut ? diffDays(checkIn, checkOut) : 0;
 
   return (
-    <div className="space-y-6">
+    <div className="page-shell py-8 sm:py-10 space-y-6">
       <nav className="text-sm text-slate-500 flex flex-wrap items-center gap-2">
         <Link to="/" className="text-shop-teal hover:underline font-medium">
           홈

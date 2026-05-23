@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from services.agent_pipeline import audit_sns_copy
 from services.listings_store import list_listings
 from services.llm import DEFAULT_MODEL, is_configured as anthropic_configured
 
@@ -40,11 +41,10 @@ def _region_key(location: str) -> str | None:
 def _claude_json(system: str, user: str, schema: dict) -> dict | None:
     if not anthropic_configured():
         return None
-    import anthropic
+    from services.api_keys import anthropic_messages_create, anthropic_response_text
 
-    client = anthropic.Anthropic()
     try:
-        response = client.messages.create(
+        response = anthropic_messages_create(
             model=DEFAULT_MODEL,
             max_tokens=800,
             system=system,
@@ -55,7 +55,7 @@ def _claude_json(system: str, user: str, schema: dict) -> dict | None:
                 "format": {"type": "json_schema", "schema": schema},
             },
         )
-        text = next(b.text for b in response.content if b.type == "text")
+        text = anthropic_response_text(response)
         return json.loads(text)
     except Exception:
         return None
@@ -84,7 +84,7 @@ def generate_sns_draft(
         schema,
     )
     if data:
-        return data
+        return audit_sns_copy(data)
 
     tags = f"#로컬링크 #{loc.replace(' ', '')} #{title[:12]}"
     return {

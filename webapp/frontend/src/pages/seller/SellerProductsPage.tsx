@@ -1,15 +1,33 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { PageHeader } from "../../components/ui/PageHeader";
+import { ListingGuidePreview } from "../../components/seller/ListingGuidePreview";
+import { SellerNoteOcrPanel } from "../../components/seller/SellerNoteOcrPanel";
 import { SellerStepIndicator } from "../../components/seller/SellerStepIndicator";
 import { SellerVoicePanel } from "../../components/seller/SellerVoicePanel";
 import { api } from "../../lib/api";
+import {
+  LISTING_TABS,
+  PRODUCT_MENU_CATEGORIES,
+  resolveKindCategory,
+  tabDefaultCategory,
+  tabLabel,
+  tabToKind,
+  type ListingTab,
+  type OcrListingDraft,
+} from "../../lib/listingTabs";
+import {
+  buildImagePromptFromListing,
+  buildOcrImagePrompt,
+  cleanOcrLocation,
+  parseOcrPrice,
+} from "../../lib/ocrFormUtils";
 import {
   LISTING_CATEGORIES,
   categoryLabel,
   type ListingCategory,
 } from "../../lib/sellerSectors";
-import { useListingsStreamVersion } from "../../hooks/useListingsStreamVersion";
 import {
   useAuthDisplayName,
   useAuthSellerId,
@@ -17,7 +35,7 @@ import {
 } from "../../store/auth";
 import { useConversation } from "../../store/conversation";
 import { useSellerFormVoice } from "../../store/sellerFormVoice";
-import type { Listing, ListingGuide } from "../../types";
+import type { ListingGuide } from "../../types";
 
 const STEP_BANNERS: Record<number, { emoji: string; title: string; sub: string; img: string }> = {
   1: {
@@ -50,18 +68,16 @@ export function SellerProductsPage() {
   const sellerSector = useAuthSellerSector();
   const sellerId = useAuthSellerId();
   const displayName = useAuthDisplayName();
-  const streamTick = useListingsStreamVersion();
   const registerVoice = useSellerFormVoice((s) => s.register);
   const unregisterVoice = useSellerFormVoice((s) => s.unregister);
 
-  const [listings, setListings] = useState<Listing[]>([]);
-  const [loading, setLoading] = useState(true);
   const [step, setStep] = useState(1);
   const listingSubmitted = useConversation((s) => s.listingSubmitted);
   const setListingSubmitted = useConversation((s) => s.setListingSubmitted);
   const slots = useConversation((s) => s.slots);
 
-  const [kind, setKind] = useState<"product" | "lodging">("product");
+  const [listingTab, setListingTab] = useState<ListingTab>("product");
+  const kind = tabToKind(listingTab);
   const [category, setCategory] = useState<ListingCategory>(sellerSector ?? "rural");
   const [title, setTitle] = useState("");
   const [price, setPrice] = useState("");
@@ -78,11 +94,52 @@ export function SellerProductsPage() {
   const [imagePromptEn, setImagePromptEn] = useState("");
   const [promptSummary, setPromptSummary] = useState<string | null>(null);
   const [aiHint, setAiHint] = useState<string | null>(null);
+  const [ocrPriceDetail, setOcrPriceDetail] = useState<string | null>(null);
 
-  const reload = useCallback(
-    () => api.getListings().then(setListings).catch(() => setListings([])),
-    []
-  );
+  const selectListingTab = useCallback((tab: ListingTab) => {
+    setListingTab(tab);
+    if (tab === "lodging" || tab === "experience") {
+      setCategory(tabDefaultCategory(tab));
+    } else if (category === "lodging" || category === "experience") {
+      setCategory(
+        sellerSector && PRODUCT_MENU_CATEGORIES.includes(sellerSector)
+          ? sellerSector
+          : "rural"
+      );
+    }
+  }, [category, sellerSector]);
+
+  const applyOcrDraft = useCallback((draft: OcrListingDraft) => {
+    const tab = draft.listing_tab;
+    setListingTab(tab);
+    setCategory(tabDefaultCategory(tab));
+    const f = draft.fields ?? {};
+    if (f.title?.value != null && String(f.title.value).trim()) {
+      setTitle(String(f.title.value).trim());
+    }
+    const { price: parsedPrice, detailNote } = parseOcrPrice(f.price?.value);
+    if (parsedPrice) setPrice(parsedPrice);
+    setOcrPriceDetail(detailNote);
+    if (f.location?.value != null) {
+      setLocation(cleanOcrLocation(String(f.location.value)));
+    }
+    const desc = f.description?.value ?? f.notes?.value;
+    let descText = desc != null ? String(desc).trim() : "";
+    if (detailNote) {
+      const tierLine = `[판매 단가] ${detailNote}`;
+      descText = descText ? `${descText}\n\n${tierLine}` : tierLine;
+    }
+    if (descText) setDescription(descText);
+    if (f.quantity?.value != null && tab !== "lodging") {
+      const q = String(f.quantity.value);
+      const m = q.match(/(\d+)/);
+      if (m) setStock(m[1]);
+    }
+    const imgHint = buildOcrImagePrompt(f, tab, String(f.title?.value ?? ""));
+    if (imgHint) setImagePromptKo(imgHint);
+    setAiHint("OCR 결과를 채웠어요. 「확인 필요」 항목은 꼭 검토해 주세요.");
+    setStep(1);
+  }, []);
 
   const fillPackageAi = useCallback(async () => {
     const t = title.trim();
@@ -95,12 +152,13 @@ export function SellerProductsPage() {
     setAiBusy(true);
     setAiHint(null);
     try {
+      const { kind: k, category: cat } = resolveKindCategory(listingTab, category);
       const r = await api.draftListingPackage({
-        kind,
+        kind: k,
         title: t,
         price: p,
         location: location.trim(),
-        category: kind === "lodging" && category !== "lodging" ? "lodging" : category,
+        category: cat,
       });
       setDescription(r.description);
       setGuide(r.guide);
@@ -111,7 +169,7 @@ export function SellerProductsPage() {
     } finally {
       setAiBusy(false);
     }
-  }, [kind, title, price, location, category]);
+  }, [listingTab, title, price, location, category]);
 
   const fillDescriptionAi = useCallback(async () => {
     const t = title.trim();
@@ -150,25 +208,31 @@ export function SellerProductsPage() {
     setAiBusy(true);
     setAiHint(null);
     try {
+      const { kind: k, category: cat } = resolveKindCategory(listingTab, category);
+      let koHint = imagePromptKo.trim();
+      if (!koHint) {
+        koHint = buildImagePromptFromListing(t, location.trim(), description.trim(), listingTab);
+        setImagePromptKo(koHint);
+      }
       let promptEn = imagePromptEn.trim();
       if (!promptEn) {
         const enhanced = await api.enhanceImagePrompt({
-          kind,
+          kind: k,
           title: t,
           location: location.trim(),
-          category,
+          category: cat,
           description: description.trim(),
-          user_hint: imagePromptKo.trim(),
+          user_hint: koHint,
         });
         promptEn = enhanced.prompt_en;
         setImagePromptEn(promptEn);
         setPromptSummary(enhanced.summary_ko);
       }
       const r = await api.draftListingImage({
-        kind,
+        kind: k,
         title: t,
         location: location.trim(),
-        category,
+        category: cat,
         description: description.trim(),
         prompt_en: promptEn,
       });
@@ -176,15 +240,20 @@ export function SellerProductsPage() {
       setStep(3);
       setAiHint("대표 사진을 만들었어요.");
     } catch (e) {
-      setAiHint(e instanceof Error ? e.message : "사진을 만들지 못했어요.");
+      const msg = e instanceof Error ? e.message : "사진을 만들지 못했어요.";
+      setAiHint(
+        msg.includes("503") || msg.includes("Connection")
+          ? "OpenAI 연결이 잠시 불안정합니다. 잠시 후 다시 시도하거나, 사진 파일을 직접 올려 주세요."
+          : msg
+      );
     } finally {
       setAiBusy(false);
     }
   }, [
-    kind,
+    listingTab,
+    category,
     title,
     location,
-    category,
     description,
     imagePromptEn,
     imagePromptKo,
@@ -209,25 +278,12 @@ export function SellerProductsPage() {
   }, [registerVoice, unregisterVoice, voiceAiWrite, generateCoverAi]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-  }, [reload]);
-
-  useEffect(() => {
-    if (listingSubmitted) reload();
-  }, [listingSubmitted, reload]);
-
-  useEffect(() => {
-    void reload();
-  }, [streamTick, reload]);
-
-  useEffect(() => {
     if (sellerSector) setCategory(sellerSector);
   }, [sellerSector]);
 
   useEffect(() => {
     if (slots.kind === "product" || slots.kind === "lodging") {
-      setKind(slots.kind);
-      if (slots.kind === "lodging") setCategory("lodging");
+      selectListingTab(slots.kind === "lodging" ? "lodging" : "product");
     }
     if (typeof slots.title === "string" && slots.title.trim()) setTitle(slots.title.trim());
     if (typeof slots.price === "number" && slots.price >= 0) setPrice(String(slots.price));
@@ -243,7 +299,7 @@ export function SellerProductsPage() {
     if (slots.kind === "lodging" && typeof slots.max_guests === "number") {
       setMaxGuests(String(slots.max_guests));
     }
-  }, [slots]);
+  }, [slots, selectListingTab]);
 
   const onPickExtraPhotos = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -278,17 +334,18 @@ export function SellerProductsPage() {
     }
     setBusy(true);
     try {
+      const { kind: k, category: cat } = resolveKindCategory(listingTab, category);
       const created = await api.createListing({
-        kind,
-        category: kind === "lodging" && category !== "lodging" ? "lodging" : category,
+        kind: k,
+        category: cat,
         seller_id: sellerId ?? undefined,
         title: title.trim(),
         description: description.trim(),
         price: Math.max(0, parseInt(price, 10) || 0),
         location: location.trim(),
-        stock: kind === "product" ? Math.max(0, parseInt(stock, 10) || 0) : null,
+        stock: k === "product" ? Math.max(0, parseInt(stock, 10) || 0) : null,
         max_guests:
-          kind === "lodging" ? Math.max(1, parseInt(maxGuests, 10) || 4) : null,
+          k === "lodging" ? Math.max(1, parseInt(maxGuests, 10) || 4) : null,
         cover_image_base64: coverDataUrl
           ? coverDataUrl.includes(",")
             ? coverDataUrl.split(",", 2)[1]
@@ -315,45 +372,44 @@ export function SellerProductsPage() {
       setImagePromptEn("");
       setPromptSummary(null);
       setAiHint(null);
+      setOcrPriceDetail(null);
       setStep(1);
-      await reload();
+      setListingSubmitted(true);
     } finally {
       setBusy(false);
     }
   };
 
-  const remove = async (id: string) => {
-    if (!confirm("이 글을 내릴까요?")) return;
-    try {
-      await api.deleteListing(id);
-      await reload();
-    } catch {
-      /* */
-    }
-  };
-
   const canNextStep1 = title.trim() && price.trim();
   const banner = STEP_BANNERS[step] ?? STEP_BANNERS[1];
-  const myListings = sellerId ? listings.filter((r) => r.seller_id === sellerId) : listings;
 
   return (
     <div className="space-y-8">
       {listingSubmitted && (
         <div className="rounded-2xl border border-shop-teal/30 bg-shop-tealLight/60 p-5 flex flex-wrap items-center justify-between gap-3">
           <p className="font-semibold text-shop-tealDark">
-            음성으로 등록이 끝났어요. 아래 목록을 확인해 보세요.
+            등록이 완료됐어요. 대시보드에서 등록된 상품을 확인하세요.
           </p>
-          <button
-            type="button"
-            className="btn-ghost text-shop-tealDark border-shop-teal/30"
-            onClick={() => setListingSubmitted(false)}
-          >
-            닫기
-          </button>
+          <div className="flex gap-2">
+            <Link
+              to="/seller"
+              className="rounded-full bg-shop-tealDark text-white text-sm font-bold px-4 py-2"
+              onClick={() => setListingSubmitted(false)}
+            >
+              대시보드로 가기
+            </Link>
+            <button
+              type="button"
+              className="btn-ghost text-shop-tealDark border-shop-teal/30"
+              onClick={() => setListingSubmitted(false)}
+            >
+              닫기
+            </button>
+          </div>
         </div>
       )}
 
-      <PageHeader badge="공급자" title="물건 올리기">
+      <PageHeader badge="공급자 · BETA" title="음성 한 번으로 올리기">
         {displayName}님 · 주 업종{" "}
         <strong>{categoryLabel(sellerSector ?? "rural")}</strong>
       </PageHeader>
@@ -378,9 +434,10 @@ export function SellerProductsPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-[minmax(280px,340px)_1fr] gap-0 xl:gap-0">
-          <div className="border-b xl:border-b-0 xl:border-r border-slate-100 p-5 sm:p-6 bg-slate-50/50">
-            <SellerVoicePanel step={step} />
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(300px,360px)_minmax(0,1fr)] gap-0 xl:gap-6">
+          <div className="border-b xl:border-b-0 xl:border-r border-slate-100 p-5 sm:p-6 bg-slate-50/50 space-y-0 xl:sticky xl:top-24 xl:self-start xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
+            <SellerNoteOcrPanel listingTab={listingTab} onApply={applyOcrDraft} />
+            <SellerVoicePanel step={step} listingTab={listingTab} />
           </div>
 
           <div className="p-5 sm:p-8">
@@ -401,41 +458,49 @@ export function SellerProductsPage() {
               {step === 1 && (
                 <div className="space-y-4 animate-fade-in">
                   <div>
-                    <label className="label-step">파는 것</label>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setKind("product")}
-                        className={kind === "product" ? "btn-primary flex-1 py-3" : "btn-ghost flex-1 py-3"}
-                      >
-                        🛒 물건
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setKind("lodging");
-                          setCategory("lodging");
-                        }}
-                        className={kind === "lodging" ? "btn-primary flex-1 py-3" : "btn-ghost flex-1 py-3"}
-                      >
-                        🏠 숙박
-                      </button>
+                    <label className="label-step">종류</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {LISTING_TABS.map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => selectListingTab(tab.id)}
+                          className={
+                            listingTab === tab.id
+                              ? "btn-primary py-3 px-2 text-sm sm:text-base"
+                              : "btn-ghost py-3 px-2 text-sm sm:text-base border-slate-200"
+                          }
+                        >
+                          <span className="block text-lg">{tab.emoji}</span>
+                          <span className="font-bold">{tab.label}</span>
+                          <span className="block text-xs opacity-80 mt-0.5">{tab.sub}</span>
+                        </button>
+                      ))}
                     </div>
                   </div>
-                  <div>
-                    <label className="label-step">쇼핑 메뉴</label>
-                    <select
-                      className="input-field text-lg"
-                      value={category}
-                      onChange={(e) => setCategory(e.target.value as ListingCategory)}
-                    >
-                      {LISTING_CATEGORIES.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {listingTab === "product" ? (
+                    <div>
+                      <label className="label-step">쇼핑 메뉴</label>
+                      <select
+                        className="input-field text-lg"
+                        value={category}
+                        onChange={(e) => setCategory(e.target.value as ListingCategory)}
+                      >
+                        {LISTING_CATEGORIES.filter((c) =>
+                          PRODUCT_MENU_CATEGORIES.includes(c.id)
+                        ).map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-600 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
+                      쇼핑 메뉴:{" "}
+                      <strong>{categoryLabel(tabDefaultCategory(listingTab))}</strong>
+                    </p>
+                  )}
                   <div>
                     <label className="label-step">이름</label>
                     <input
@@ -456,6 +521,11 @@ export function SellerProductsPage() {
                       required
                       placeholder="42000"
                     />
+                    {ocrPriceDetail ? (
+                      <p className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                        메모에 여러 단가가 있습니다. 대표 가격만 넣었어요 — 전체: {ocrPriceDetail}
+                      </p>
+                    ) : null}
                   </div>
                   <div>
                     <label className="label-step">동네 (시·군)</label>
@@ -471,44 +541,53 @@ export function SellerProductsPage() {
 
               {step === 2 && (
                 <div className="space-y-4">
-                  <div>
-                    <label className="label-step">소개 글</label>
-                    <textarea
-                      className="input-field text-lg min-h-[140px]"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder="어떤 물건인지, 왜 좋은지 적어 주세요."
-                    />
-                  </div>
-                  <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4 space-y-3">
-                    <p className="font-semibold text-slate-800">AI 도움</p>
-                    <p className="text-sm text-slate-600">
-                      버튼을 누르거나, 왼쪽에서 「AI로 글 써줘」라고 말씀하세요.
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="btn-primary py-2.5 px-4"
-                        disabled={busy || aiBusy}
-                        onClick={() => void fillPackageAi()}
-                      >
-                        {aiBusy ? "만드는 중…" : "소개 + 이용안내 한번에"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-ghost py-2.5 px-4 border-violet-200"
-                        disabled={busy || aiBusy}
-                        onClick={() => void fillDescriptionAi()}
-                      >
-                        소개만 짧게
-                      </button>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                    <div className="space-y-4">
+                      <div>
+                        <label className="label-step">소개 글</label>
+                        <textarea
+                          className="input-field text-lg min-h-[180px]"
+                          value={description}
+                          onChange={(e) => setDescription(e.target.value)}
+                          placeholder="어떤 물건인지, 왜 좋은지 적어 주세요."
+                        />
+                      </div>
+                      <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4 space-y-3">
+                        <p className="font-semibold text-slate-800">AI 도움</p>
+                        <p className="text-sm text-slate-600">
+                          버튼을 누르거나, 왼쪽에서 「AI로 글 써줘」라고 말씀하세요.
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="btn-primary py-2.5 px-4"
+                            disabled={busy || aiBusy}
+                            onClick={() => void fillPackageAi()}
+                          >
+                            {aiBusy ? "만드는 중…" : "소개 + 이용안내 한번에"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost py-2.5 px-4 border-violet-200"
+                            disabled={busy || aiBusy}
+                            onClick={() => void fillDescriptionAi()}
+                          >
+                            소개만 짧게
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    {guide ? (
-                      <p className="text-sm text-shop-tealDark bg-white rounded-lg px-3 py-2 border border-shop-teal/20">
-                        이용 안내 준비됨 · 포인트 {(guide.highlights ?? []).length}개 · 순서{" "}
-                        {(guide.steps ?? []).length}단계
-                      </p>
-                    ) : null}
+                    <div>
+                      {guide ? (
+                        <ListingGuidePreview guide={guide} />
+                      ) : (
+                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 p-6 text-center text-sm text-slate-500 min-h-[200px] flex items-center justify-center">
+                          「소개 + 이용안내 한번에」를 누르면
+                          <br />
+                          포인트·순서·환불 안내가 여기에 표시됩니다.
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -526,7 +605,10 @@ export function SellerProductsPage() {
                         className="input-field mt-1"
                         value={imagePromptKo}
                         onChange={(e) => setImagePromptKo(e.target.value)}
-                        placeholder="예: 밭에서 수확하는 모습"
+                        placeholder={
+                          imagePromptKo.trim() ||
+                          "예: 산지 고사리, 자연광 아래 정갈한 포장"
+                        }
                       />
                     </div>
                     <button
@@ -591,7 +673,7 @@ export function SellerProductsPage() {
                   <h3 className="font-bold text-lg">올리기 전에 확인</h3>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm sm:text-base">
                     <dt className="text-slate-500">종류</dt>
-                    <dd>{kind === "product" ? "물건" : "숙박"}</dd>
+                    <dd>{tabLabel(listingTab)}</dd>
                     <dt className="text-slate-500">이름</dt>
                     <dd className="font-semibold">{title || "—"}</dd>
                     <dt className="text-slate-500">가격</dt>
@@ -601,17 +683,7 @@ export function SellerProductsPage() {
                     <dt className="text-slate-500">사진</dt>
                     <dd>{coverDataUrl ? "대표 있음" : "없음 (나중에 추가 가능)"}</dd>
                   </dl>
-                  {kind === "product" ? (
-                    <div>
-                      <label className="label-step">남은 개수</label>
-                      <input
-                        className="input-field"
-                        inputMode="numeric"
-                        value={stock}
-                        onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))}
-                      />
-                    </div>
-                  ) : (
+                  {listingTab === "lodging" ? (
                     <div>
                       <label className="label-step">최대 몇 명</label>
                       <input
@@ -619,6 +691,16 @@ export function SellerProductsPage() {
                         inputMode="numeric"
                         value={maxGuests}
                         onChange={(e) => setMaxGuests(e.target.value.replace(/\D/g, ""))}
+                      />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="label-step">남은 개수</label>
+                      <input
+                        className="input-field"
+                        inputMode="numeric"
+                        value={stock}
+                        onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))}
                       />
                     </div>
                   )}
@@ -659,40 +741,6 @@ export function SellerProductsPage() {
         </div>
       </section>
 
-      <section className="rounded-3xl border border-slate-200 bg-white overflow-hidden shadow-md">
-        <div className="px-6 py-4 border-b bg-slate-50/80">
-          <h2 className="text-xl font-bold">지금 판매 중</h2>
-        </div>
-        {loading ? (
-          <p className="p-8 text-center text-slate-500">불러오는 중…</p>
-        ) : myListings.length === 0 ? (
-          <p className="p-10 text-center text-slate-500">아직 올린 글이 없어요.</p>
-        ) : (
-          <ul className="divide-y">
-            {myListings.map((row) => (
-              <li
-                key={row.id}
-                className="flex flex-wrap items-center gap-3 px-5 py-4 hover:bg-slate-50/50"
-              >
-                <span className="text-2xl">{row.emoji}</span>
-                <div className="flex-1 min-w-[200px]">
-                  <p className="font-semibold">{row.title}</p>
-                  <p className="text-sm text-slate-500">
-                    {row.price.toLocaleString()}원 · {row.location}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="text-sm text-red-600 font-semibold"
-                  onClick={() => remove(row.id)}
-                >
-                  내리기
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
     </div>
   );
 }

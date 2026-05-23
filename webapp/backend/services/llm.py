@@ -5,10 +5,16 @@ from __future__ import annotations
 import json
 import os
 import re
-from functools import lru_cache
 
-import anthropic
-
+from services.agent_pipeline import (
+    audit_seller_confirm,
+    pipeline_mode,
+    polish_tts_reply,
+    run_slot_pipeline,
+)
+from services.asr_correction import normalize_location, normalize_slots_locations
+from services.api_keys import anthropic_messages_create, anthropic_response_text, is_anthropic_configured
+from services.demo_config import is_demo_mode
 from services.listings_store import listings_summary_for_llm
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -28,6 +34,7 @@ def _consumer_system() -> str:
 - 한두 문장, 따뜻하고 쉬운 말.
 - 마크다운·글머리·이모지·영어는 쓰지 마세요. 음성으로 읽힙니다.
 - 인식이 어색해도 의미만 이해하고, 오타 지적은 하지 마세요.
+- 사용자 발화는 Whisper→규칙→AI 검수(A2A)로 이미 교정된 텍스트입니다. 지명·숫자를 그대로 신뢰하세요.
 
 ## 채울 정보
 1. listing_id — 아래 목록의 id. 사용자가 말한 물건·민박과 가장 가까운 것.
@@ -51,6 +58,10 @@ def _seller_system() -> str:
 ## 답변
 - 한두 문장, 존댓말. 어려운 말은 쓰지 마세요.
 - 마크다운·글머리·이모지·영어는 쓰지 마세요.
+
+## 음성 인식
+- 입력은 Whisper 후 A2A(규칙+Claude+검수)로 교정된 문장입니다.
+- 값평→가평 같은 지명 교정은 이미 반영되었을 수 있습니다. location·title을 그대로 채우세요.
 
 ## 등록에 필요한 것
 1. listing_type — 상품이면 product, 숙박·민박이면 lodging.
@@ -76,14 +87,7 @@ def _seller_system() -> str:
 
 
 def is_configured() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
-
-
-@lru_cache(maxsize=1)
-def _client() -> anthropic.Anthropic:
-    if not is_configured():
-        raise RuntimeError("ANTHROPIC_API_KEY missing")
-    return anthropic.Anthropic()
+    return is_anthropic_configured()
 
 
 _CONSUMER_SLOT_SCHEMA = {
@@ -180,33 +184,7 @@ def _extract_price_kr(text: str) -> int | None:
 
 
 def _extract_location_kr(text: str) -> str | None:
-    m = re.search(r"([가-힣]{2,6}(?:시|군|구))", text or "")
-    if m:
-        return m.group(1)
-
-    cities = (
-        ("김제", "김제시"),
-        ("천안", "천안시"),
-        ("강릉", "강릉시"),
-        ("전주", "전주시"),
-        ("목포", "목포시"),
-        ("여수", "여수시"),
-        ("속초", "속초시"),
-        ("화성", "화성시"),
-        ("수원", "수원시"),
-        ("김포", "김포시"),
-        ("파주", "파주시"),
-        ("제주", "제주시"),
-        ("포항", "포항시"),
-        ("춘천", "춘천시"),
-        ("원주", "원주시"),
-        ("홍천", "홍천군"),
-        ("평창", "평창군"),
-    )
-    for short, full in cities:
-        if short in (text or ""):
-            return full
-    return None
+    return normalize_location(text)
 
 
 def _seller_rule_slots_from_blob(blob: str) -> dict:
@@ -321,6 +299,7 @@ def seller_offline_turn(user_text: str, history: list[dict]) -> dict:
     cmd = _seller_voice_command(user_text)
     blob = _user_utterances_blob(history, user_text)
     slots = _seller_rule_slots_from_blob(blob)
+    slots = normalize_slots_locations(slots)
     if cmd == "ai_write":
         return {
             "reply": "네, AI로 소개 글을 채울게요. 잠시만 기다려 주세요.",
@@ -347,6 +326,16 @@ def seller_offline_turn(user_text: str, history: list[dict]) -> dict:
     prompted = _seller_prompted_confirm(history)
 
     if complete and affirm and prompted:
+        audit = audit_seller_confirm(slots, list(history or []) + [{"role": "user", "content": user_text}])
+        slots = audit.slots
+        if not audit.approved:
+            return {
+                "reply": _seller_format_summary(slots)
+                + " 한 번 더 확인해 주세요. 맞으면 네 하고 말씀해 주세요.",
+                "slots": slots,
+                "intent": "register",
+                "ready_to_confirm": False,
+            }
         return {
             "reply": "네, 알겠습니다. 바로 반영할게요.",
             "slots": slots,
@@ -394,43 +383,115 @@ def chat_turn_for_mode(user_text: str, history: list[dict], mode: str) -> dict:
             "error": "ANTHROPIC_API_KEY missing",
         }
 
-    system = _consumer_system() if mode == "consumer" else _seller_system()
-    client = _client()
     messages = list(history) + [{"role": "user", "content": user_text}]
 
-    response = client.messages.create(
-        model=DEFAULT_MODEL,
-        max_tokens=MAX_TOKENS,
-        system=[
-            {
-                "type": "text",
-                "text": system,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=messages,
-        thinking={"type": "disabled"},
-        output_config={"effort": "low"},
-    )
-    reply = next(b.text for b in response.content if b.type == "text").strip()
+    try:
+        system = _consumer_system() if mode == "consumer" else _seller_system()
+
+        response = anthropic_messages_create(
+            model=DEFAULT_MODEL,
+            max_tokens=MAX_TOKENS,
+            system=[
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=messages,
+            thinking={"type": "disabled"},
+            output_config={"effort": "low"},
+        )
+        reply = anthropic_response_text(response)
+    except Exception:
+        if mode == "seller":
+            return seller_offline_turn(user_text, list(history or []))
+        return {
+            "reply": "잠시 연결이 불안정해요. 다시 한번 말씀해 주시겠어요?",
+            "slots": {},
+            "intent": "error",
+            "ready_to_confirm": False,
+        }
 
     schema = _CONSUMER_SLOT_SCHEMA if mode == "consumer" else _SELLER_SLOT_SCHEMA
-    slots, intent, ready = _extract_slots(
-        messages + [{"role": "assistant", "content": reply}],
-        schema,
-        mode,
-    )
+    try:
+        slots, intent, ready = _extract_slots(
+            messages + [{"role": "assistant", "content": reply}],
+            schema,
+            mode,
+        )
+        slot_pipe = run_slot_pipeline(
+            messages + [{"role": "assistant", "content": reply}],
+            slots,
+            intent,
+            ready,
+            mode,
+        )
+        slots = slot_pipe.slots
+        intent = slot_pipe.intent
+        ready = slot_pipe.ready_to_confirm
+    except Exception:
+        slot_pipe = None
+        slots = normalize_slots_locations(
+            _seller_rule_slots_from_blob(_user_utterances_blob(history, user_text))
+            if mode == "seller"
+            else {}
+        )
+        intent = "register" if mode == "seller" else "other"
+        ready = False
+
+    affirm = _is_affirmation(user_text)
+    prompted = _seller_prompted_confirm(history)
+
+    if mode == "seller" and ready:
+        if not (affirm and prompted):
+            ready = False
+            if intent == "confirm":
+                intent = "register"
+
+    confirm_audit = None
+    if mode == "seller" and ready:
+        try:
+            confirm_audit = audit_seller_confirm(slots, messages)
+            slots = confirm_audit.slots
+            if not confirm_audit.approved:
+                ready = False
+                intent = "register"
+                reply = (
+                    "잠깐만요. "
+                    + _seller_format_summary(slots)
+                    + " 맞는지 다시 확인해 주세요. 틀린 부분 있으면 다시 말씀해 주세요."
+                )
+        except Exception:
+            ready = False
+            intent = "register"
+
+    if mode == "seller" and ready and affirm and prompted:
+        intent = "confirm"
+
+    reply = polish_tts_reply(reply)
 
     return {
         "reply": reply,
         "slots": slots,
         "intent": intent,
         "ready_to_confirm": ready,
+        "slot_pipeline": slot_pipe.to_meta() if slot_pipe else None,
+        "confirm_audit": (
+            {
+                "approved": confirm_audit.approved,
+                "issues": confirm_audit.issues,
+                "a2a_steps": confirm_audit.a2a_steps,
+            }
+            if confirm_audit
+            else None
+        ),
+        "agent_pipeline_mode": pipeline_mode(),
+        "demo_mode": is_demo_mode(),
     }
 
 
 def _extract_slots(conversation: list[dict], schema: dict, mode: str) -> tuple[dict, str, bool]:
-    client = _client()
     if mode == "consumer":
         extractor = """\
 대화에서 주문 슬롯을 추출하세요.
@@ -447,7 +508,7 @@ ready_to_confirm은 필수 항목이 채워지고 확인 단계일 때만 true.
 """
 
     try:
-        response = client.messages.create(
+        response = anthropic_messages_create(
             model=DEFAULT_MODEL,
             max_tokens=512,
             system=extractor,
@@ -464,7 +525,7 @@ ready_to_confirm은 필수 항목이 채워지고 확인 단계일 때만 true.
                 "format": {"type": "json_schema", "schema": schema},
             },
         )
-        text = next(b.text for b in response.content if b.type == "text")
+        text = anthropic_response_text(response)
         data = json.loads(text)
         intent = data.pop("intent", "other")
         ready = data.pop("ready_to_confirm", False)
@@ -474,6 +535,7 @@ ready_to_confirm은 필수 항목이 채워지고 확인 단계일 때만 true.
             lt = slots.pop("listing_type")
             if isinstance(lt, str) and lt in ("product", "lodging"):
                 slots["kind"] = lt
+        slots = normalize_slots_locations(slots)
         return slots, intent, bool(ready)
     except Exception:
         return {}, "other", False

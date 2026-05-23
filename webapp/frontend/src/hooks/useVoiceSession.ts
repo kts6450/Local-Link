@@ -64,6 +64,12 @@ export function useVoiceSession() {
       const blob = await stopperRef.current();
       stopperRef.current = null;
 
+      if (blob.size < 8000) {
+        setError("녹음이 너무 짧아요. 마이크를 누른 뒤 천천히 말씀해 주세요.");
+        setPhase("error");
+        return;
+      }
+
       const result = await api.voiceTurn(blob, history, "seller");
 
       if (result.user_text) appendUser(result.user_text);
@@ -80,7 +86,7 @@ export function useVoiceSession() {
 
       const merged = useConversation.getState().slots;
 
-      if (result.ready_to_confirm) {
+      if (result.ready_to_confirm && result.intent === "confirm") {
         const kind = merged.kind === "lodging" ? "lodging" : "product";
         const title = String(merged.title || "").trim();
         const price = Number(merged.price);
@@ -151,8 +157,11 @@ export function useVoiceSession() {
             reset("seller");
             welcomePlayedRef.current = false;
             setListingSubmitted(true);
-          } catch {
-            /* */
+            appendAssistant("등록이 완료되었습니다. 감사합니다.");
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            setError(`등록 중 문제가 생겼어요. 오른쪽 폼에서 '다음'을 눌러 주세요. (${msg})`);
+            setPhase("error");
           }
         }
       }
@@ -166,6 +175,7 @@ export function useVoiceSession() {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(`처리 중 문제가 생겼어요: ${msg}`);
+      setPhase("error");
     }
   }, [
     history,
@@ -179,6 +189,8 @@ export function useVoiceSession() {
     setListingSubmitted,
     ttsEnabled,
     reset,
+    sellerId,
+    sellerSector,
   ]);
 
   const toggle = useCallback(async () => {

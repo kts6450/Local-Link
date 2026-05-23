@@ -18,8 +18,9 @@ export async function startRecording(
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: {
       channelCount: 1,
-      noiseSuppression: true,
       echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
     },
   });
 
@@ -41,8 +42,12 @@ export async function startRecording(
       onLevel(Math.min(1, rms * 4));
     }
   };
+  // ScriptProcessor는 출력에 연결해야 동작. gain 0으로 스피커 피드백 방지.
+  const silent = ctx.createGain();
+  silent.gain.value = 0;
   source.connect(buffer);
-  buffer.connect(ctx.destination);
+  buffer.connect(silent);
+  silent.connect(ctx.destination);
 
   return {
     stop: async () => {

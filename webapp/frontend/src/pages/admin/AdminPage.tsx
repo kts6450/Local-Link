@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 
 import { PageHeader } from "../../components/ui/PageHeader";
+import { LocalLinkLogo } from "../../components/brand/LocalLinkLogo";
 import { api } from "../../lib/api";
 import { useAuthRole } from "../../store/auth";
 
@@ -78,8 +79,8 @@ export function AdminPage() {
       <header className="bg-white border-b border-hades-line">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link to="/" className="flex items-center">
-              <img src="/logo-local-link.png" alt="" className="h-9 w-auto" />
+            <Link to="/" className="no-underline text-inherit">
+              <LocalLinkLogo size="sm" />
             </Link>
             <span className="text-xs font-bold text-white bg-rose-600 px-2.5 py-1 rounded-full">
               운영자

@@ -22,6 +22,10 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from services.asr import asr_status_detail, transcribe_audio_bytes
+from services.demo_config import a2a_chain_for_status, is_demo_mode
+from services.agent_pipeline import pipeline_mode
+from services.api_keys import provider_status
+from services.asr_correction import correct_asr_text, correction_mode
 from services.llm import chat_turn_for_mode, is_configured as llm_configured
 from services.tts import synthesize_mp3
 
@@ -37,6 +41,11 @@ def status():
         # 하위 호환: 기존 필드명 유지
         "asr_backend": detail["asr_backend_class"],
         "llm_configured": llm_configured(),
+        "asr_correction_mode": correction_mode(),
+        "agent_pipeline_mode": pipeline_mode(),
+        "providers": provider_status(),
+        "demo_mode": is_demo_mode(),
+        "a2a_chain": a2a_chain_for_status(),
     }
 
 
@@ -51,7 +60,7 @@ async def turn(
         raise HTTPException(status_code=400, detail="empty audio")
 
     try:
-        user_text = transcribe_audio_bytes(audio_bytes)
+        user_text_raw = transcribe_audio_bytes(audio_bytes)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"ASR 실패: {e}")
 
@@ -62,10 +71,23 @@ async def turn(
     except json.JSONDecodeError:
         history_list = []
 
+    correction = correct_asr_text(
+        user_text_raw,
+        mode=mode if mode in ("consumer", "seller") else "consumer",
+        history=history_list,
+    )
+    user_text = correction.text
+
     if not user_text.strip():
         # 인식 결과가 비어있으면 LLM 호출 스킵, 사용자에게 다시 요청
         return {
             "user_text": "",
+            "user_text_raw": user_text_raw,
+            "asr_correction": {
+                "pipeline": correction.pipeline,
+                "rule_fixes": correction.rule_fixes,
+                "a2a_steps": correction.a2a_steps,
+            },
             "reply": "죄송합니다. 잘 못 들었어요. 다시 한번 말씀해 주시겠어요?",
             "slots": {},
             "intent": "noisy",
@@ -73,9 +95,22 @@ async def turn(
             "tts_url": _tts_url("죄송합니다. 잘 못 들었어요. 다시 한번 말씀해 주시겠어요?"),
         }
 
-    result = chat_turn_for_mode(user_text, history_list, mode)
+    try:
+        result = chat_turn_for_mode(user_text, history_list, mode)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"음성 처리 일시 오류: {exc}. 다시 말씀해 주세요.",
+        ) from exc
+
     result["user_text"] = user_text
-    result["tts_url"] = _tts_url(result["reply"])
+    result["user_text_raw"] = user_text_raw
+    result["asr_correction"] = {
+        "pipeline": correction.pipeline,
+        "rule_fixes": correction.rule_fixes,
+        "a2a_steps": correction.a2a_steps,
+    }
+    result["tts_url"] = _safe_tts_url(result.get("reply", ""))
     return result
 
 
@@ -108,3 +143,12 @@ def tts(text: str):
 
 def _tts_url(text: str) -> str:
     return f"/api/voice/tts?text={urllib.parse.quote(text)}"
+
+
+def _safe_tts_url(reply: str) -> str | None:
+    text = (reply or "").strip()
+    if not text:
+        return None
+    if len(text) > 180:
+        text = text[:177].rstrip() + "…"
+    return _tts_url(text)

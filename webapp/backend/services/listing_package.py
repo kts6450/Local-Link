@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import os
 
-import anthropic
-
+from services.agent_pipeline import audit_listing_copy
 from services.listing_guide import is_experience
 from services.llm import DEFAULT_MODEL, is_configured as anthropic_configured
 
@@ -214,9 +213,10 @@ def generate_listing_package(
 - 사실에 없는 인증·수상·전화번호는 쓰지 말 것.
 """
 
-    client = anthropic.Anthropic()
+    from services.api_keys import anthropic_messages_create, anthropic_response_text
+
     try:
-        response = client.messages.create(
+        response = anthropic_messages_create(
             model=DEFAULT_MODEL,
             max_tokens=2000,
             system="너는 농어촌 체험·특산 마켓의 상세 페이지 작성자다. JSON만 출력한다.",
@@ -227,9 +227,10 @@ def generate_listing_package(
                 "format": {"type": "json_schema", "schema": _PACKAGE_SCHEMA},
             },
         )
-        text = next(b.text for b in response.content if b.type == "text")
+        text = anthropic_response_text(response)
         data = json.loads(text)
         desc = str(data.get("description", "")).strip()
+        desc = audit_listing_copy(desc, title=title, price=price, location=location)
         guide = {k: data.get(k) for k in _PACKAGE_SCHEMA["properties"] if k != "description"}
         if not desc:
             fb = _fallback_package(kind, title, price, location, category)

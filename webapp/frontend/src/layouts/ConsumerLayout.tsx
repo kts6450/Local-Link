@@ -1,6 +1,8 @@
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 
-import { ShopSubNav } from "../components/shop/ShopSubNav";
+import { SiteFooter } from "../components/marketing/SiteFooter";
+import { LocalLinkLogo } from "../components/brand/LocalLinkLogo";
+import { ShopCategoryNav } from "../components/shop/ShopCategoryNav";
 import { FontSizeToggle } from "../components/FontSizeToggle";
 import {
   useAuth,
@@ -14,45 +16,43 @@ export function ConsumerLayout() {
   const role = useAuthRole();
   const displayName = useAuthDisplayName();
   const logout = useAuth((s) => s.logout);
-  const { pathname } = useLocation();
-  const isShopHome = pathname === "/";
 
   return (
     <div className="min-h-screen flex flex-col bg-brand-cream text-hades-text">
-      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-lg border-b border-hades-line">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-wrap items-center justify-between gap-3 py-3">
-          <Link to="/" className="flex items-center shrink-0">
-            <img
-              src="/logo-local-link.png"
-              alt="로컬링크"
-              className="h-9 sm:h-10 w-auto object-contain"
-            />
+      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-lg border-b border-brand-line">
+        <div className="page-shell py-3 flex flex-wrap items-center justify-between gap-3 lg:gap-6">
+          <Link to="/" className="shrink-0 no-underline text-inherit">
+            <LocalLinkLogo />
           </Link>
 
-          <div className="flex items-center gap-2 ml-auto">
-            <span className="hidden sm:inline text-sm text-hades-muted">
+          <div className="order-last w-full flex justify-center lg:order-none lg:w-auto lg:flex-1">
+            <ShopCategoryNav />
+          </div>
+
+          <div className="flex items-center gap-2 sm:gap-3 ml-auto lg:ml-0 shrink-0">
+            <span className="hidden md:inline text-sm text-hades-muted">
               {displayName}님
               {role === "master" ? " · 운영" : ""}
             </span>
             {role === "seller" || role === "master" ? (
               <Link
-                to="/seller/products"
-                className="hidden lg:inline text-sm font-semibold text-hades-muted hover:text-shop-tealDark px-2"
+                to="/seller/dashboard"
+                className="hidden lg:inline text-sm font-semibold text-hades-muted hover:text-brand-ink"
               >
-                셀러오피스
+                판매자
               </Link>
             ) : null}
             {role === "master" ? (
               <Link
                 to="/admin"
-                className="hidden lg:inline text-sm font-semibold text-rose-700 hover:text-rose-900 px-2"
+                className="hidden lg:inline text-sm font-semibold text-rose-700 hover:text-rose-900"
               >
                 어드민
               </Link>
             ) : null}
             <NavLink
               to="/checkout"
-              className="inline-flex items-center gap-2 rounded-xl bg-shop-teal text-white font-bold text-sm px-4 py-2.5 hover:bg-shop-tealHover transition-colors"
+              className="inline-flex items-center gap-2 rounded-full bg-brand-ink text-white font-bold text-sm px-5 py-2.5 hover:bg-brand-ink/90 transition-colors"
             >
               장바구니
               {n > 0 && (
@@ -63,7 +63,7 @@ export function ConsumerLayout() {
             </NavLink>
             <button
               type="button"
-              className="text-sm text-hades-muted hover:text-hades-text px-1"
+              className="text-sm text-hades-muted hover:text-brand-ink"
               onClick={() => {
                 logout();
                 window.location.href = "/login?role=consumer";
@@ -74,19 +74,13 @@ export function ConsumerLayout() {
             <FontSizeToggle variant="consumer" />
           </div>
         </div>
-        {isShopHome && <ShopSubNav />}
       </header>
 
-      <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
+      <main className="flex-1 w-full">
         <Outlet />
       </main>
 
-      <footer className="mt-auto border-t border-hades-line bg-white py-8">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 text-center text-sm text-hades-muted space-y-1">
-          <p className="font-semibold text-hades-text">로컬링크 · 농어촌 직거래</p>
-          <p>회원 전용 · 시연용 결제</p>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

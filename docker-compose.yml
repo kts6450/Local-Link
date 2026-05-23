@@ -26,13 +26,14 @@ services:
       - "8088:8088"
     environment:
       TTT_ASR_BACKEND: ${TTT_ASR_BACKEND:-}
+      TTT_MODEL_ID: ${TTT_MODEL_ID:-elderly_command}
       TTT_MODEL_PATH: ${TTT_MODEL_PATH:-/models}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_IMAGE_MODEL: ${OPENAI_IMAGE_MODEL:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
     volumes:
-      - ${TTT_MODEL_DIR:-./.docker_empty_models}:/models:ro
+      - ${TTT_MODEL_DIR:-./models/inference/elderly_command}:/models:ro
       - marketplace-data:/app/webapp/backend/data/runtime
     restart: unless-stopped
 
