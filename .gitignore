@@ -23,3 +23,8 @@ dist/
 .claude/
 
 webapp/backend/data/runtime/
+
+# 로컬 UI 검증 스크린샷·스크립트
+webapp/frontend/verify*.png
+webapp/frontend/verify.mjs
+webapp/backend/_smoke.py
