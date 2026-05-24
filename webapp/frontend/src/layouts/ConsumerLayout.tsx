@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet } from "react-router-dom";
 import { SiteFooter } from "../components/marketing/SiteFooter";
 import { LocalLinkLogo } from "../components/brand/LocalLinkLogo";
 import { ShopCategoryNav } from "../components/shop/ShopCategoryNav";
+import { AssistantWidget } from "../components/shop/AssistantWidget";
 import { FontSizeToggle } from "../components/FontSizeToggle";
 import {
   useAuth,
@@ -18,26 +19,26 @@ export function ConsumerLayout() {
   const logout = useAuth((s) => s.logout);
 
   return (
-    <div className="min-h-screen flex flex-col bg-brand-cream text-hades-text">
-      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-lg border-b border-brand-line">
-        <div className="page-shell py-3 flex flex-wrap items-center justify-between gap-3 lg:gap-6">
+    <div className="min-h-screen flex flex-col bg-brand-cream text-brand-ink">
+      <header className="sticky top-0 z-50 bg-brand-cream/85 backdrop-blur-xl border-b border-brand-line/60">
+        <div className="page-shell h-[72px] sm:h-[84px] flex items-center justify-between gap-4 lg:gap-8">
           <Link to="/" className="shrink-0 no-underline text-inherit">
             <LocalLinkLogo />
           </Link>
 
-          <div className="order-last w-full flex justify-center lg:order-none lg:w-auto lg:flex-1">
+          <div className="hidden lg:flex flex-1 justify-center">
             <ShopCategoryNav />
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3 ml-auto lg:ml-0 shrink-0">
-            <span className="hidden md:inline text-sm text-hades-muted">
+          <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+            <span className="hidden xl:inline text-sm font-medium text-hades-muted">
               {displayName}님
               {role === "master" ? " · 운영" : ""}
             </span>
             {role === "seller" || role === "master" ? (
               <Link
                 to="/seller/dashboard"
-                className="hidden lg:inline text-sm font-semibold text-hades-muted hover:text-brand-ink"
+                className="hidden lg:inline text-sm font-semibold text-hades-muted hover:text-brand-ink transition-colors"
               >
                 판매자
               </Link>
@@ -45,25 +46,26 @@ export function ConsumerLayout() {
             {role === "master" ? (
               <Link
                 to="/admin"
-                className="hidden lg:inline text-sm font-semibold text-rose-700 hover:text-rose-900"
+                className="hidden lg:inline text-sm font-semibold text-rose-700 hover:text-rose-900 transition-colors"
               >
                 어드민
               </Link>
             ) : null}
             <NavLink
               to="/checkout"
-              className="inline-flex items-center gap-2 rounded-full bg-brand-ink text-white font-bold text-sm px-5 py-2.5 hover:bg-brand-ink/90 transition-colors"
+              className="inline-flex items-center gap-2 rounded-full bg-brand-ink text-white font-bold text-sm px-5 py-2.5 sm:px-6 sm:py-3 hover:bg-brand-ink/90 active:scale-[0.98] transition-all shadow-soft"
             >
-              장바구니
+              <span aria-hidden>🛒</span>
+              <span className="hidden sm:inline">장바구니</span>
               {n > 0 && (
-                <span className="min-w-[1.25rem] h-5 flex items-center justify-center rounded-full bg-white/20 text-xs px-1.5">
+                <span className="min-w-[1.4rem] h-5 flex items-center justify-center rounded-full bg-white text-brand-ink text-[11px] font-bold px-1.5 tabular-nums">
                   {n}
                 </span>
               )}
             </NavLink>
             <button
               type="button"
-              className="text-sm text-hades-muted hover:text-brand-ink"
+              className="hidden sm:inline text-sm font-medium text-hades-muted hover:text-brand-ink transition-colors"
               onClick={() => {
                 logout();
                 window.location.href = "/login?role=consumer";
@@ -74,6 +76,10 @@ export function ConsumerLayout() {
             <FontSizeToggle variant="consumer" />
           </div>
         </div>
+
+        <div className="lg:hidden border-t border-brand-line/60 page-shell py-2.5 flex justify-center">
+          <ShopCategoryNav />
+        </div>
       </header>
 
       <main className="flex-1 w-full">
@@ -81,6 +87,7 @@ export function ConsumerLayout() {
       </main>
 
       <SiteFooter />
+      <AssistantWidget />
     </div>
   );
 }

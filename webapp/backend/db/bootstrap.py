@@ -27,7 +27,24 @@ def init_database() -> None:
     _ensure_sqlite_columns()
     if os.environ.get("LOCAL_LINK_RESEED") == "1":
         _clear_listings_for_reseed()
-    _seed_listings_if_empty()
+
+    demo_mode = os.environ.get("LOCAL_LINK_DEMO_SEED", "1") not in ("0", "false", "False", "")
+    if demo_mode:
+        try:
+            from db.demo_seed_runner import repair_demo_guides, repair_demo_images, seed_demo_marketplace
+
+            force = os.environ.get("LOCAL_LINK_RESEED") == "1"
+            seed_demo_marketplace(force=force)
+            repaired = repair_demo_images()
+            if repaired:
+                print(f"[demo_seed] repaired {repaired} listing cover images")
+            guides = repair_demo_guides()
+            if guides:
+                print(f"[demo_seed] filled {guides} listing guides")
+        except Exception as e:  # noqa: BLE001
+            print(f"[demo_seed] skipped: {e}")
+    else:
+        _seed_listings_if_empty()
     _seed_orders_if_empty()
 
 

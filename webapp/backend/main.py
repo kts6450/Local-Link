@@ -22,7 +22,16 @@ from fastapi.middleware.cors import CORSMiddleware
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
-from routers import admin, auth, marketplace, orders, reviews, seller_dashboard, voice  # noqa: E402
+from routers import (  # noqa: E402
+    admin,
+    assistant,
+    auth,
+    marketplace,
+    orders,
+    reviews,
+    seller_dashboard,
+    voice,
+)
 
 
 @asynccontextmanager
@@ -64,6 +73,7 @@ app.include_router(reviews.router)
 app.include_router(seller_dashboard.router)
 app.include_router(orders.router)
 app.include_router(voice.router)
+app.include_router(assistant.router)
 
 
 @app.get("/health")

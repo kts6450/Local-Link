@@ -1,5 +1,7 @@
 import { authHeaders } from "./authFetch";
 import type {
+  AssistantReply,
+  AssistantTurn,
   AuthUser,
   Brand,
   FeatureFlagItem,
@@ -270,6 +272,13 @@ export const api = {
       kind ? `/api/marketplace/listings?kind=${kind}` : "/api/marketplace/listings",
       init
     ),
+  getBestListings: (limit = 12) =>
+    getJson<{ items: Listing[] }>(`/api/marketplace/best-listings?limit=${limit}`),
+
+  assistantChat: (body: {
+    user_text: string;
+    history: Pick<AssistantTurn, "role" | "content">[];
+  }) => postJson<AssistantReply>("/api/assistant/chat", body),
   getListing: (id: string, init?: RequestInit) =>
     getJson<Listing>(`/api/marketplace/listings/${id}`, init),
 

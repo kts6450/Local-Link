@@ -8,10 +8,10 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from db.database import SessionLocal
-from db.models import ListingRow
+from db.models import ListingRow, ReviewRow
 from services.listing_events import bump_listings_version
 from services.listing_guide import guide_to_json, parse_guide_json
 
@@ -41,7 +41,7 @@ def _decode_cover_b64(raw: str | None) -> bytes | None:
     return data
 
 
-def _row_to_dict(row: ListingRow) -> dict:
+def _row_to_dict(row: ListingRow, *, rating: float = 0.0, review_count: int = 0) -> dict:
     from services.listing_photos import list_photos
 
     return {
@@ -60,7 +60,24 @@ def _row_to_dict(row: ListingRow) -> dict:
         "cover_image_url": row.cover_image_url,
         "guide": parse_guide_json(getattr(row, "guide_json", None)),
         "photos": list_photos(row.id),
+        "rating": round(rating, 1) if rating else 0.0,
+        "review_count": int(review_count or 0),
     }
+
+
+def _review_aggregates(session, listing_ids: list[str]) -> dict[str, tuple[float, int]]:
+    if not listing_ids:
+        return {}
+    rows = session.execute(
+        select(
+            ReviewRow.listing_id,
+            func.avg(ReviewRow.rating),
+            func.count(ReviewRow.id),
+        )
+        .where(ReviewRow.listing_id.in_(listing_ids))
+        .group_by(ReviewRow.listing_id)
+    ).all()
+    return {row[0]: (float(row[1] or 0.0), int(row[2] or 0)) for row in rows}
 
 
 def list_listings() -> list[dict]:
@@ -68,7 +85,44 @@ def list_listings() -> list[dict]:
         rows = session.scalars(
             select(ListingRow).order_by(ListingRow.created_at.desc())
         ).all()
-        return [_row_to_dict(r) for r in rows]
+        agg = _review_aggregates(session, [r.id for r in rows])
+        out = []
+        for r in rows:
+            avg, cnt = agg.get(r.id, (0.0, 0))
+            out.append(_row_to_dict(r, rating=avg, review_count=cnt))
+        return out
+
+
+def list_best_listings(limit: int = 12) -> list[dict]:
+    """리뷰 평점·건수 기반 베스트 — 최소 5건 이상 받은 listing 우선."""
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(
+                ReviewRow.listing_id,
+                func.avg(ReviewRow.rating).label("avg_rating"),
+                func.count(ReviewRow.id).label("cnt"),
+            )
+            .group_by(ReviewRow.listing_id)
+            .having(func.count(ReviewRow.id) >= 5)
+        ).all()
+        ranked = sorted(
+            rows,
+            key=lambda r: (float(r[1] or 0), int(r[2] or 0)),
+            reverse=True,
+        )[: max(limit, 1)]
+        if not ranked:
+            return []
+        ids = [r[0] for r in ranked]
+        listings = session.scalars(
+            select(ListingRow).where(ListingRow.id.in_(ids))
+        ).all()
+        agg = {r[0]: (float(r[1] or 0), int(r[2] or 0)) for r in ranked}
+        items = []
+        for row in listings:
+            avg, cnt = agg.get(row.id, (0.0, 0))
+            items.append(_row_to_dict(row, rating=avg, review_count=cnt))
+        items.sort(key=lambda d: (d["rating"], d["review_count"]), reverse=True)
+        return items
 
 
 def listings_summary_for_llm() -> str:
@@ -86,7 +140,11 @@ def listings_summary_for_llm() -> str:
 def get_listing(listing_id: str) -> dict | None:
     with SessionLocal() as session:
         row = session.get(ListingRow, listing_id)
-        return _row_to_dict(row) if row else None
+        if row is None:
+            return None
+        agg = _review_aggregates(session, [listing_id])
+        avg, cnt = agg.get(listing_id, (0.0, 0))
+        return _row_to_dict(row, rating=avg, review_count=cnt)
 
 
 def create_listing(record: dict) -> dict:

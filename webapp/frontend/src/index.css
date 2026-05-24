@@ -8,68 +8,195 @@
   #root {
     height: 100%;
   }
+  html {
+    scroll-behavior: smooth;
+  }
   body {
     background: theme("colors.brand.cream");
     color: theme("colors.hades.text");
     font-family: theme("fontFamily.sans");
+    font-size: 17px;
+    line-height: 1.65;
+    letter-spacing: -0.005em;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: theme("colors.brand.ink");
+    color: white;
+  }
+  /* 부드러운 페이지 진입 */
+  main {
+    animation: pageFade 0.4s ease-out;
+  }
+  @keyframes pageFade {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* 카드·리스트 진입 stagger */
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    animation: revealUp 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+  @keyframes revealUp {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* 챗봇 팝 인 */
+  .assistant-pop {
+    animation: assistantPop 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+    transform-origin: bottom right;
+  }
+  @keyframes assistantPop {
+    from {
+      opacity: 0;
+      transform: translateY(20px) scale(0.92);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  /* 그라데이션 시프트 (마케팅 강조 영역) */
+  .bg-aurora {
+    background: linear-gradient(120deg, #FAF7F2 0%, #F0EBE3 30%, #FAF7F2 60%, #FCE7B3 100%);
+    background-size: 200% 200%;
+    animation: auroraShift 16s ease-in-out infinite;
+  }
+  @keyframes auroraShift {
+    0%, 100% { background-position: 0% 50%; }
+    50%      { background-position: 100% 50%; }
+  }
+
+  /* hover ripple (interactive surfaces) */
+  .ripple-on-hover {
+    position: relative;
+    overflow: hidden;
+  }
+  .ripple-on-hover::after {
+    content: "";
+    position: absolute;
+    inset: auto;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 9999px;
+    background: rgba(28, 25, 23, 0.06);
+    transform: translate(-50%, -50%);
+    transition: width 0.55s ease, height 0.55s ease;
+  }
+  .ripple-on-hover:hover::after {
+    width: 240%;
+    height: 240%;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    main,
+    .reveal,
+    .assistant-pop,
+    .bg-aurora {
+      animation: none !important;
+    }
+    .reveal {
+      opacity: 1;
+      transform: none;
+    }
   }
 }
 
 @layer components {
   .card {
-    @apply bg-white border border-brand-line rounded-3xl shadow-card;
+    @apply bg-white border border-brand-line/80 rounded-3xl shadow-card;
+  }
+
+  .card-hover {
+    @apply card transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover;
   }
 
   .input-field {
-    @apply w-full rounded-xl border border-hades-line bg-white px-4 py-3 text-base
-           text-hades-text placeholder:text-slate-400
-           focus:outline-none focus:ring-2 focus:ring-shop-teal/25 focus:border-shop-teal;
+    @apply w-full rounded-2xl border border-brand-line bg-white px-5 py-3.5 text-base
+           text-brand-ink placeholder:text-hades-muted/70
+           focus:outline-none focus:ring-2 focus:ring-brand-ink/15 focus:border-brand-ink/30
+           transition-colors;
   }
 
   .label-step {
-    @apply block text-sm font-bold text-slate-700 mb-1.5;
+    @apply block text-sm font-bold text-brand-ink mb-2 tracking-tight;
   }
 
   .btn-primary {
-    @apply bg-brand-ink text-white font-bold rounded-full px-6 py-3
-           hover:bg-brand-ink/90 transition-colors disabled:opacity-50 shadow-sm;
+    @apply inline-flex items-center justify-center gap-2 bg-brand-ink text-white font-bold
+           rounded-full px-7 py-3.5 text-base
+           hover:bg-brand-ink/90 active:scale-[0.98] transition-all
+           disabled:opacity-50 disabled:cursor-not-allowed shadow-soft;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 bg-white text-brand-ink font-bold
+           rounded-full px-7 py-3.5 text-base border border-brand-line
+           hover:bg-brand-warm active:scale-[0.98] transition-all
+           disabled:opacity-50;
   }
 
   .btn-ghost {
-    @apply text-hades-muted hover:text-hades-text border border-hades-line bg-white
-           rounded-xl px-4 py-2.5 font-semibold transition-colors hover:bg-hades-bg;
+    @apply inline-flex items-center justify-center text-hades-muted hover:text-brand-ink
+           font-semibold rounded-full px-4 py-2 transition-colors;
   }
 
   .btn-shop {
-    @apply bg-shop-teal text-white font-bold rounded-xl px-6 py-3 shadow-sm
-           hover:bg-shop-tealHover transition-colors disabled:opacity-50;
+    @apply bg-brand-ink text-white font-bold rounded-full px-6 py-3 shadow-soft
+           hover:bg-brand-ink/90 transition-colors disabled:opacity-50;
   }
 
   .btn-shop-outline {
-    @apply border-2 border-shop-teal text-shop-tealDark font-bold rounded-xl px-6 py-3
-           bg-white hover:bg-shop-tealLight transition-colors disabled:opacity-50;
+    @apply border border-brand-line text-brand-ink font-bold rounded-full px-6 py-3
+           bg-white hover:bg-brand-warm transition-colors disabled:opacity-50;
   }
 
   .chip {
-    @apply px-4 py-2 rounded-full text-sm font-semibold border border-brand-line
-           bg-white text-brand-ink transition-colors hover:bg-brand-warm;
+    @apply px-5 py-2.5 rounded-full text-sm font-semibold border border-brand-line
+           bg-white text-brand-ink transition-all hover:bg-brand-warm hover:border-brand-ink/20;
   }
 
   .chip-active {
-    @apply chip bg-brand-ink border-brand-ink text-white shadow-sm hover:bg-brand-ink;
+    @apply chip bg-brand-ink border-brand-ink text-white shadow-soft hover:bg-brand-ink hover:border-brand-ink;
+  }
+
+  /* 디스플레이 타이틀 (랜딩·섹션 헤드) */
+  .display-1 {
+    @apply text-4xl sm:text-5xl lg:text-6xl font-bold text-brand-ink tracking-tight leading-[1.05];
+  }
+  .display-2 {
+    @apply text-3xl sm:text-4xl lg:text-5xl font-bold text-brand-ink tracking-tight leading-[1.1];
+  }
+  .heading-section {
+    @apply text-2xl sm:text-3xl font-bold text-brand-ink tracking-tight leading-tight;
+  }
+
+  /* 섹션 위 작은 라벨 (eyebrow) */
+  .eyebrow {
+    @apply inline-flex items-center gap-2 text-xs sm:text-sm font-bold uppercase tracking-[0.18em] text-brand-ink/60;
+  }
+  .eyebrow::before {
+    content: "";
+    @apply inline-block h-px w-8 bg-brand-ink/30;
   }
 
   .page-title {
-    @apply text-2xl sm:text-3xl font-bold text-hades-text tracking-tight;
+    @apply text-3xl sm:text-4xl font-bold text-brand-ink tracking-tight leading-tight;
   }
 
   .page-lead {
-    @apply mt-2 text-hades-muted leading-relaxed max-w-2xl;
+    @apply mt-3 text-base sm:text-lg text-hades-muted leading-relaxed max-w-2xl;
   }
 
   .page-shell {
-    @apply w-full px-5 sm:px-8 lg:px-10 xl:px-14 2xl:px-20;
+    @apply w-full px-5 sm:px-8 lg:px-12 xl:px-16 2xl:px-24;
   }
 
   .full-bleed {
@@ -77,5 +204,30 @@
     max-width: 100vw;
     margin-left: calc(50% - 50vw);
     margin-right: calc(50% - 50vw);
+  }
+
+  /* 섹션 사이 일관 간격 */
+  .section-stack > * + * {
+    @apply mt-12 sm:mt-16 lg:mt-20;
+  }
+
+  /* 카드형 통계 박스 */
+  .stat-card {
+    @apply card p-6 sm:p-7 flex items-start gap-4;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+  .scrollbar-hide {
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
   }
 }

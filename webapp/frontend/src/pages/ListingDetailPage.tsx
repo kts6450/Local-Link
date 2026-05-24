@@ -230,7 +230,7 @@ export function ListingDetailPage() {
   const nights = checkIn && checkOut ? diffDays(checkIn, checkOut) : 0;
 
   return (
-    <div className="page-shell py-8 sm:py-10 space-y-6">
+    <div className="page-shell py-8 sm:py-10 pb-16 sm:pb-24 space-y-6">
       <nav className="text-sm text-slate-500 flex flex-wrap items-center gap-2">
         <Link to="/" className="text-shop-teal hover:underline font-medium">
           홈
@@ -325,7 +325,7 @@ export function ListingDetailPage() {
             </button>
           </div>
 
-          <div className="mt-2 flex border border-brand-line bg-white rounded-t-xl overflow-hidden">
+          <div className="mt-2 flex border border-brand-line bg-white rounded-t-2xl overflow-hidden shadow-soft">
             <button type="button" className={tabCls("info")} onClick={() => setTab("info")}>
               상품 정보
             </button>
@@ -337,9 +337,9 @@ export function ListingDetailPage() {
             </button>
           </div>
 
-          <div className="mt-6 space-y-4 bg-white rounded-b-xl">
+          <div className="rounded-b-2xl border border-t-0 border-brand-line bg-white p-6 sm:p-8 pb-10 sm:pb-12 shadow-soft overflow-visible">
             {tab === "info" && (
-              <>
+              <div className="space-y-6 sm:space-y-8">
                 <p className="text-sm font-semibold text-shop-tealDark">
                   {areaLabel} · {listing.location}
                 </p>
@@ -357,10 +357,10 @@ export function ListingDetailPage() {
                   )}
                 </p>
                 <ListingInfoSections listing={listing} />
-              </>
+              </div>
             )}
             {tab === "guide" && (
-              <div className="space-y-8">
+              <div className="space-y-8 sm:space-y-10 overflow-visible">
                 <ListingUsageGuideSections guide={listing.guide} />
                 <ListingLocalGuide listing={listing} />
               </div>

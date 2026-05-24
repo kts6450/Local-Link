@@ -34,6 +34,7 @@ from services.listings_store import (
     create_listing,
     delete_listing,
     get_listing,
+    list_best_listings,
     list_listings,
 )
 from services.llm import is_configured as anthropic_configured
@@ -62,6 +63,12 @@ def get_listings(kind: str | None = None):
     if kind in ("product", "lodging"):
         items = [x for x in items if x.get("kind") == kind]
     return items
+
+
+@router.get("/best-listings")
+def get_best_listings(limit: int = 12):
+    """리뷰 평점·건수 기반 베스트 상품·숙박·체험."""
+    return {"items": list_best_listings(limit=max(1, min(int(limit), 24)))}
 
 
 @router.get("/listings/events")
@@ -98,7 +105,7 @@ def get_listing_local_guide(listing_id: str):
     loc = e.get("location") or ""
     title = e.get("title") or ""
     stored = e.get("guide") if isinstance(e.get("guide"), dict) else None
-    tourism = tourism_tips(loc, title)
+    tourism = tourism_tips(loc, title, use_llm=False)
     if stored and stored.get("nearby"):
         tourism = {
             **tourism,

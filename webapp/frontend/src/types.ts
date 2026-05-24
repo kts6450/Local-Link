@@ -105,6 +105,31 @@ export interface Listing {
   cover_image_url?: string | null;
   guide?: ListingGuide | null;
   photos?: ListingPhoto[];
+  rating?: number;
+  review_count?: number;
+}
+
+export interface AssistantCard {
+  id: string;
+  kind: "product" | "lodging";
+  category?: ListingCategory;
+  title: string;
+  price: number;
+  location: string;
+  cover_image_url?: string | null;
+  rating: number;
+  review_count: number;
+}
+
+export interface AssistantTurn {
+  role: "user" | "assistant";
+  content: string;
+  cards?: AssistantCard[];
+}
+
+export interface AssistantReply {
+  reply: string;
+  recommendations: AssistantCard[];
 }
 
 export interface Brand {

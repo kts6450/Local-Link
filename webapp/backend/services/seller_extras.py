@@ -98,10 +98,24 @@ def generate_sns_draft(
     }
 
 
-def tourism_tips(location: str, title: str = "") -> dict:
+def tourism_tips(location: str, title: str = "", *, use_llm: bool = True) -> dict:
     loc = (location or "").strip() or "우리 지역"
     key = _region_key(loc)
     base = _REGION_HINTS.get(key or "", {})
+
+    highlights = [
+        base.get("tourism") or f"{loc} 주변 명소·축제·체험 마을을 상품 설명에 한 줄 넣어 보세요.",
+        "배송·픽업·현장 수령 중 가능한 방식을 적어 두면 신뢰가 높아집니다.",
+    ]
+    fallback = {
+        "location": loc,
+        "highlights": highlights,
+        "seller_tip": "지역 사진·수확 시기·생산자 한 마디를 함께 올리면 전환율이 좋아집니다.",
+    }
+
+    if not use_llm:
+        return fallback
+
     schema = {
         "type": "object",
         "properties": {
@@ -119,15 +133,7 @@ def tourism_tips(location: str, title: str = "") -> dict:
     if data:
         return {"location": loc, **data}
 
-    highlights = [
-        base.get("tourism") or f"{loc} 주변 명소·축제·체험 마을을 상품 설명에 한 줄 넣어 보세요.",
-        "배송·픽업·현장 수령 중 가능한 방식을 적어 두면 신뢰가 높아집니다.",
-    ]
-    return {
-        "location": loc,
-        "highlights": highlights,
-        "seller_tip": "지역 사진·수확 시기·생산자 한 마디를 함께 올리면 전환율이 좋아집니다.",
-    }
+    return fallback
 
 
 def weather_season_tips(location: str) -> dict:
