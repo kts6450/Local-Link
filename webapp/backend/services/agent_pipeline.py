@@ -206,7 +206,85 @@ def _rule_fix_slots(slots: dict, conversation: list[dict], mode: str) -> tuple[d
                 out["kind"] = "product"
                 fixes.append("kind→product")
 
+        # 명령형/도움 요청 발화가 슬롯에 잘못 들어간 경우 제거.
+        # ("노트 사진으로 채우려고" 같은 발화가 location/title 로 들어가는 사고 방지)
+        for key in ("location", "title", "description"):
+            v = out.get(key)
+            if isinstance(v, str) and _looks_like_command(v):
+                out[key] = "" if key != "title" else None
+                fixes.append(f"{key}:removed_command_phrase")
+
     return normalize_slots_locations(out), fixes
+
+
+_COMMAND_PATTERN = re.compile(
+    r"(노트\s*사진|메모\s*사진|사진(으|을|로)?\s*(채워|찍|올려|입력|보고|읽)|"
+    r"OCR|글\s*(써|만들|적어)|소개\s*글|설명\s*(써|만들|채워|적어)|"
+    r"AI(로|가|에게|한테)?\s*(써|만들|그려|채워|해)|"
+    r"(이미지|그림|대표\s*사진)\s*(만들|그려|생성|찍)|"
+    r"(채워|만들어|그려|써|적어|올려|등록(해|할게)|확인(해|할게))(\s*주(세요|시겠어요|시오)?)?|"
+    r"채우(려고|려|어\s*줘|러)|적으(려고|려|어\s*줘))"
+)
+
+
+def _looks_like_command(text: str) -> bool:
+    """노트 사진으로 채우려고 / AI로 글 써줘 같은 명령형 발화를 식별."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    # 행정구역 표기가 있으면 location 일 가능성 높으므로 명령으로 판정하지 않는다.
+    if re.search(r"(특별시|광역시|도|시|군|구|읍|면|동|리)$", t):
+        return False
+    return bool(_COMMAND_PATTERN.search(t))
+
+
+# 마켓(택배·픽업) 상품에서는 "체험"류 단어가 어울리지 않으므로 자연스러운 표현으로 치환.
+_EXPERIENCE_WORD_REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"체험해\s*보세요"), "맛보세요"),
+    (re.compile(r"체험할\s*수\s*있"), "느끼실 수 있"),
+    (re.compile(r"체험을\s*하"), "직접 즐기"),
+    (re.compile(r"체험하시"), "즐기시"),
+    (re.compile(r"체험하"), "즐기"),
+    (re.compile(r"체험을\s*"), "맛을 "),
+    (re.compile(r"체험\s*프로그램"), "상품"),
+    (re.compile(r"체험\s*"), "맛 "),
+    (re.compile(r"체험"), "맛"),
+    (re.compile(r"견학"), "방문"),
+    (re.compile(r"프로그램"), "상품"),
+]
+
+
+def _strip_experience_words(text: str) -> str:
+    """마켓 상품 본문에서 '체험'류 단어를 자연스러운 단어로 바꿔 준다."""
+    out = text or ""
+    for pat, rep in _EXPERIENCE_WORD_REPLACEMENTS:
+        out = pat.sub(rep, out)
+    return out
+
+
+def strip_experience_in_package(pkg: dict) -> dict:
+    """마켓 상품 패키지(JSON)에서 텍스트 필드의 '체험' 단어를 모두 정리."""
+    if not isinstance(pkg, dict):
+        return pkg
+    for key in ("description", "refund_policy", "address", "meeting_place"):
+        v = pkg.get(key)
+        if isinstance(v, str):
+            pkg[key] = _strip_experience_words(v)
+    for key in ("highlights", "included", "not_included", "precautions"):
+        v = pkg.get(key)
+        if isinstance(v, list):
+            pkg[key] = [
+                _strip_experience_words(s) if isinstance(s, str) else s for s in v
+            ]
+    steps = pkg.get("steps")
+    if isinstance(steps, list):
+        for st in steps:
+            if isinstance(st, dict):
+                for sk in ("title", "body"):
+                    sv = st.get(sk)
+                    if isinstance(sv, str):
+                        st[sk] = _strip_experience_words(sv)
+    return pkg
 
 
 def _claude_json(system: str, user: str, schema: dict) -> dict | None:
@@ -451,12 +529,21 @@ def audit_seller_confirm(slots: dict, conversation: list[dict]) -> ConfirmAuditR
     )
 
 
-def audit_listing_copy(description: str, *, title: str, price: int, location: str) -> str:
+def audit_listing_copy(
+    description: str,
+    *,
+    title: str,
+    price: int,
+    location: str,
+    is_market_product: bool = False,
+) -> str:
     text = (description or "").strip()
     if not text:
         return text
     fixed, fixes = apply_rule_corrections(text)
     loc = normalize_location(location) or location
+    if is_market_product:
+        fixed = _strip_experience_words(fixed)
     if pipeline_mode() == "off" or not _anthropic_configured():
         return fixed
 
@@ -470,12 +557,21 @@ def audit_listing_copy(description: str, *, title: str, price: int, location: st
         "additionalProperties": False,
     }
     data = _claude_json(
-        "상품 설명 사실 검수. 가격·지역·제목과 맞게 다듬고 허위 인증·수치는 제거. JSON만.",
-        f"제목:{title}\n가격:{price}\n지역:{loc}\n설명:{fixed}",
+        (
+            "당신은 농수산·체험 마켓의 상품 설명 사실 검수자입니다. "
+            "원문의 분량·문장 수·말투·정보량을 그대로 유지하면서, 가격·지역·제목과 맞지 않는 "
+            "부분이나 허위 인증·과장된 수치만 살짝 수정합니다. 본문을 새로 쓰거나 짧게 요약해서는 "
+            "안 됩니다. 위반 내용이 없으면 원문을 그대로 description 에 돌려주세요. "
+            "fixes 에는 실제로 고친 부분만 짧게 나열합니다. 출력은 반드시 JSON 한 개입니다."
+        ),
+        f"제목: {title}\n가격: {price}\n지역: {loc}\n원문 설명:\n{fixed}",
         schema,
     )
-    if data and data.get("description"):
-        return str(data["description"]).strip()
+    audited = str((data or {}).get("description") or "").strip()
+    # LLM 이 본문을 통째로 짧은 placeholder 로 바꿔버리는 케이스가 있어
+    # 결과가 원문의 절반 미만이면 원문을 그대로 사용한다.
+    if audited and len(audited) >= max(40, len(fixed) // 2):
+        return audited
     return fixed
 
 
@@ -583,3 +679,177 @@ def polish_tts_reply(reply: str) -> str:
     if len(short) >= 20:
         return short
     return text[:120].rstrip() + "…"
+
+
+_OCR_AUDIT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": ["string", "null"]},
+        "price": {"type": ["integer", "string", "null"]},
+        "quantity": {"type": ["string", "null"]},
+        "location": {"type": ["string", "null"]},
+        "description": {"type": ["string", "null"]},
+        "issues": {"type": "array", "items": {"type": "string"}},
+        "fixes": {"type": "array", "items": {"type": "string"}},
+        "needs_review_keys": {"type": "array", "items": {"type": "string"}},
+        "approved": {"type": "boolean"},
+    },
+    "required": ["issues", "fixes", "needs_review_keys", "approved"],
+    "additionalProperties": False,
+}
+
+
+def _ocr_audit_value(fields: dict, key: str) -> Any:
+    item = fields.get(key) if isinstance(fields, dict) else None
+    if isinstance(item, dict):
+        return item.get("value")
+    return item
+
+
+def audit_ocr_listing(
+    fields: dict[str, dict],
+    *,
+    raw_text: str,
+    listing_tab: str | None = None,
+) -> tuple[dict[str, dict], list[dict[str, Any]]]:
+    """OCR 1차 결과(`fields`)를 다중 에이전트로 검수·보강.
+
+    - A2(Claude 텍스트): 행정구역·단위·일관성을 보고 수정안 제안. 적용된 항목은
+      해당 field 의 needs_review=False 로 내려가며 confidence 가 살짝 올라간다.
+    - A3(OpenAI gpt-4o-mini, max 모드): 행정구역 모순만 따로 한 번 더 점검.
+    두 단계 모두 실패해도 원본 fields 를 그대로 돌려준다.
+
+    반환: (검수된 fields, a2a_steps 메타데이터 배열)
+    """
+    steps: list[dict[str, Any]] = []
+    fields = dict(fields or {})
+    mode = pipeline_mode()
+    if mode == "off":
+        return fields, steps
+
+    title = _ocr_audit_value(fields, "title") or ""
+    price_raw = _ocr_audit_value(fields, "price")
+    quantity = _ocr_audit_value(fields, "quantity") or ""
+    location = _ocr_audit_value(fields, "location") or ""
+    description = _ocr_audit_value(fields, "description") or ""
+
+    # A2 — Claude 검수자
+    if _anthropic_configured():
+        system = (
+            "당신은 한국 농어촌 셀러 메모 OCR 검수자입니다. "
+            "1차 OCR 결과를 받아 행정구역·가격·단위·제목 일관성을 검증하고, "
+            "오류만 최소한으로 교정합니다. 본문을 새로 쓰지 마세요. "
+            "특히 location 은 시·도 + 시·군·구 + 읍·면·동 순으로 가능한 한 풍부해야 하며, "
+            "「경상북도 vs 경상남도」, 「전라북도 vs 전라남도」, 「충청북도 vs 충청남도」를 "
+            "절대 혼동하지 마세요. 면·동 이름이 어느 시·군·도에 속하는지로 추론하세요. "
+            "예) 기계면→경상북도 포항시 북구 기계면. 가야면→경상남도 합천군 가야면. "
+            "교정이 필요 없으면 approved=true 로 두고 fixes 는 비웁니다. "
+            "출력은 반드시 JSON 한 개. 값을 바꾼 경우만 해당 키에 새 값을 쓰세요. "
+            "fixes 배열 항목은 「어르신께 보여드릴 안내문」이라고 생각하고 작성하세요. "
+            "규칙: (1) 영어 단어(price, notes, description, highlights 등)나 약어를 절대 쓰지 말고 "
+            "한국어로만 적습니다. (2) 한 항목은 한 문장(20자 내외)으로 짧고 부드럽게. "
+            "(3) 숫자·금액·단위는 그대로 두되, 코드 표기(`field=value`, JSON 등)는 금지. "
+            "예) ‘가격을 100g 기준 13,000원으로 정리했어요.’, ‘경상북도 포항시까지 같이 적어 두었어요.’"
+        )
+        user = (
+            f"등록 유형: {listing_tab or 'product'}\n"
+            f"raw_text:\n{raw_text}\n\n"
+            f"1차 결과:\n"
+            f"- title: {title}\n"
+            f"- price: {price_raw}\n"
+            f"- quantity: {quantity}\n"
+            f"- location: {location}\n"
+            f"- description: {description}\n"
+        )
+        data = _claude_json(system, user, _OCR_AUDIT_SCHEMA)
+        if data is not None:
+            applied: list[str] = []
+            for key in ("title", "price", "quantity", "location", "description"):
+                new_val = data.get(key)
+                if new_val is None:
+                    continue
+                if isinstance(new_val, str) and not new_val.strip():
+                    continue
+                if key in fields and isinstance(fields[key], dict):
+                    old = fields[key].get("value")
+                    if old != new_val:
+                        fields[key] = {
+                            **fields[key],
+                            "value": new_val,
+                            "confidence": min(
+                                1.0, float(fields[key].get("confidence") or 0.6) + 0.1
+                            ),
+                            "needs_review": False,
+                        }
+                        applied.append(key)
+                else:
+                    fields[key] = {
+                        "value": new_val,
+                        "confidence": 0.7,
+                        "needs_review": False,
+                    }
+                    applied.append(key)
+            review_keys = [
+                k for k in (data.get("needs_review_keys") or []) if isinstance(k, str)
+            ]
+            for k in review_keys:
+                if k in fields and isinstance(fields[k], dict):
+                    fields[k] = {**fields[k], "needs_review": True}
+            steps.append(
+                {
+                    "agent": "claude_ocr_auditor",
+                    "approved": bool(data.get("approved")),
+                    "applied": applied,
+                    "issues": [
+                        s for s in (data.get("issues") or []) if isinstance(s, str)
+                    ][:5],
+                    "fixes": [
+                        s for s in (data.get("fixes") or []) if isinstance(s, str)
+                    ][:5],
+                    "needs_review_keys": review_keys,
+                }
+            )
+
+    # A3 — OpenAI 교차 검증 (max 모드 + 키 있을 때만)
+    if mode == "max" and _openai_configured():
+        loc_after = _ocr_audit_value(fields, "location") or ""
+        title_after = _ocr_audit_value(fields, "title") or ""
+        verifier_system = (
+            "한국 행정구역 검증자. 입력된 location 표기가 실제로 존재하는지 확인하고, "
+            "모순이 있으면 corrected 에 정정안을 적습니다. 출력은 JSON 한 개: "
+            '{"approved": bool, "corrected": "...", "issues": ["..."]}'
+        )
+        verifier_user = f"title: {title_after}\nlocation: {loc_after}\nraw_text:\n{raw_text}"
+        v = _openai_json(verifier_system, verifier_user)
+        if v:
+            corrected = str(v.get("corrected") or "").strip()
+            approved = bool(v.get("approved"))
+            if not approved and corrected and corrected != loc_after:
+                if "location" in fields and isinstance(fields["location"], dict):
+                    fields["location"] = {
+                        **fields["location"],
+                        "value": corrected,
+                        "needs_review": False,
+                        "confidence": min(
+                            1.0,
+                            float(fields["location"].get("confidence") or 0.7) + 0.1,
+                        ),
+                    }
+                else:
+                    fields["location"] = {
+                        "value": corrected,
+                        "confidence": 0.75,
+                        "needs_review": False,
+                    }
+            steps.append(
+                {
+                    "agent": "openai_ocr_verifier",
+                    "approved": approved,
+                    "corrected_location": corrected if not approved else "",
+                    "issues": [
+                        s for s in (v.get("issues") or []) if isinstance(s, str)
+                    ][:5],
+                }
+            )
+
+    return fields, steps

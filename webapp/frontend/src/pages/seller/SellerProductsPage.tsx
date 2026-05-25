@@ -1,5 +1,5 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../../components/ui/PageHeader";
 import { ListingGuidePreview } from "../../components/seller/ListingGuidePreview";
@@ -71,6 +71,10 @@ export function SellerProductsPage() {
   const registerVoice = useSellerFormVoice((s) => s.register);
   const unregisterVoice = useSellerFormVoice((s) => s.unregister);
 
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const editId = searchParams.get("edit");
+
   const [step, setStep] = useState(1);
   const listingSubmitted = useConversation((s) => s.listingSubmitted);
   const setListingSubmitted = useConversation((s) => s.setListingSubmitted);
@@ -114,15 +118,17 @@ export function SellerProductsPage() {
     setListingTab(tab);
     setCategory(tabDefaultCategory(tab));
     const f = draft.fields ?? {};
-    if (f.title?.value != null && String(f.title.value).trim()) {
-      setTitle(String(f.title.value).trim());
-    }
+    const ocrTitle =
+      f.title?.value != null && String(f.title.value).trim()
+        ? String(f.title.value).trim()
+        : "";
+    if (ocrTitle) setTitle(ocrTitle);
     const { price: parsedPrice, detailNote } = parseOcrPrice(f.price?.value);
     if (parsedPrice) setPrice(parsedPrice);
     setOcrPriceDetail(detailNote);
-    if (f.location?.value != null) {
-      setLocation(cleanOcrLocation(String(f.location.value)));
-    }
+    const ocrLocation =
+      f.location?.value != null ? cleanOcrLocation(String(f.location.value)) : "";
+    if (ocrLocation) setLocation(ocrLocation);
     const desc = f.description?.value ?? f.notes?.value;
     let descText = desc != null ? String(desc).trim() : "";
     if (detailNote) {
@@ -137,6 +143,15 @@ export function SellerProductsPage() {
     }
     const imgHint = buildOcrImagePrompt(f, tab, String(f.title?.value ?? ""));
     if (imgHint) setImagePromptKo(imgHint);
+    // OCR 로 채워진 값을 음성 도우미가 인지하도록 conversation slots 에도 머지.
+    const ocrPriceNum = parsedPrice ? Number(parsedPrice) : undefined;
+    useConversation.getState().mergeSlots({
+      ...(ocrTitle ? { title: ocrTitle } : {}),
+      ...(ocrPriceNum != null && !Number.isNaN(ocrPriceNum) ? { price: ocrPriceNum } : {}),
+      ...(ocrLocation ? { location: ocrLocation } : {}),
+      ...(descText ? { description: descText } : {}),
+      kind: tab === "lodging" ? "lodging" : "product",
+    });
     setAiHint("OCR 결과를 채웠어요. 「확인 필요」 항목은 꼭 검토해 주세요.");
     setStep(1);
   }, []);
@@ -242,9 +257,8 @@ export function SellerProductsPage() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : "사진을 만들지 못했어요.";
       setAiHint(
-        msg.includes("503") || msg.includes("Connection")
-          ? "OpenAI 연결이 잠시 불안정합니다. 잠시 후 다시 시도하거나, 사진 파일을 직접 올려 주세요."
-          : msg
+        "사진 생성 중 잠시 문제가 있었어요. 다시 시도해 주시거나 「내 사진 올리기」로 직접 올려 주세요."
+          + (msg ? `\n(원인: ${msg.slice(0, 120)})` : "")
       );
     } finally {
       setAiBusy(false);
@@ -269,10 +283,43 @@ export function SellerProductsPage() {
     }
   }, [fillPackageAi, fillDescriptionAi]);
 
+  // 폼 상태 스냅샷 — 음성 도우미가 매 turn마다 백엔드에 같이 보내서
+  // OCR/직접 입력으로 채워진 값을 LLM 이 알아보고 다시 묻지 않게 한다.
+  const formSnapshotRef = useRef({
+    title,
+    price,
+    description,
+    location,
+    listing_tab: listingTab,
+    stock,
+    max_guests: maxGuests,
+  });
+  formSnapshotRef.current = {
+    title,
+    price,
+    description,
+    location,
+    listing_tab: listingTab,
+    stock,
+    max_guests: maxGuests,
+  };
+
   useEffect(() => {
     registerVoice({
       onAiWrite: voiceAiWrite,
       onAiImage: generateCoverAi,
+      getFormState: () => {
+        const f = formSnapshotRef.current;
+        return {
+          title: f.title?.trim() || undefined,
+          price: f.price?.trim() ? Number(f.price) : undefined,
+          description: f.description?.trim() || undefined,
+          location: f.location?.trim() || undefined,
+          listing_tab: f.listing_tab,
+          stock: f.stock?.trim() ? Number(f.stock) : undefined,
+          max_guests: f.max_guests?.trim() ? Number(f.max_guests) : undefined,
+        };
+      },
     });
     return () => unregisterVoice();
   }, [registerVoice, unregisterVoice, voiceAiWrite, generateCoverAi]);
@@ -300,6 +347,60 @@ export function SellerProductsPage() {
       setMaxGuests(String(slots.max_guests));
     }
   }, [slots, selectListingTab]);
+
+  // 수정 모드: ?edit=<id> 면 기존 상품 내용을 폼에 채운다.
+  useEffect(() => {
+    if (!editId) return;
+    let cancelled = false;
+    void api
+      .getListing(editId)
+      .then((l) => {
+        if (cancelled || !l) return;
+        const tab: ListingTab =
+          l.kind === "lodging"
+            ? "lodging"
+            : l.category === "experience"
+              ? "experience"
+              : "product";
+        setListingTab(tab);
+        if (l.category) setCategory(l.category as ListingCategory);
+        setTitle(l.title ?? "");
+        setPrice(l.price != null ? String(l.price) : "");
+        setDescription(l.description ?? "");
+        setGuide(l.guide ?? null);
+        setLocation(l.location ?? "");
+        if (l.stock != null) setStock(String(l.stock));
+        if (l.max_guests != null) setMaxGuests(String(l.max_guests));
+        setCoverDataUrl(l.cover_image_url ?? null);
+        setStep(1);
+      })
+      .catch(() => {
+        setAiHint("상품 정보를 불러오지 못했어요.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [editId]);
+
+  // 대표 이미지 생성은 외부 키 없이도 동작하므로 별도 가드는 두지 않는다.
+
+  // 제목이 바뀌면 이전 영문 프롬프트를 비워서 새 상품에 옛 prompt 가 재사용되는 걸 막는다.
+  // (사용자가 직접 적은 한국어 힌트 imagePromptKo 는 보존)
+  useEffect(() => {
+    setImagePromptEn("");
+    setPromptSummary(null);
+  }, [title]);
+
+  const onPickCover = (files: FileList | null) => {
+    const f = files?.[0];
+    if (!f || !f.type.startsWith("image/")) return;
+    const r = new FileReader();
+    r.onload = () => {
+      setCoverDataUrl(String(r.result || ""));
+      setStep(3);
+    };
+    r.readAsDataURL(f);
+  };
 
   const onPickExtraPhotos = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -335,7 +436,9 @@ export function SellerProductsPage() {
     setBusy(true);
     try {
       const { kind: k, category: cat } = resolveKindCategory(listingTab, category);
-      const created = await api.createListing({
+      // 새로 만든(data:) 이미지만 전송 — 기존 URL이면 그대로 유지.
+      const coverIsNew = coverDataUrl?.startsWith("data:") ?? false;
+      const payload = {
         kind: k,
         category: cat,
         seller_id: sellerId ?? undefined,
@@ -346,17 +449,16 @@ export function SellerProductsPage() {
         stock: k === "product" ? Math.max(0, parseInt(stock, 10) || 0) : null,
         max_guests:
           k === "lodging" ? Math.max(1, parseInt(maxGuests, 10) || 4) : null,
-        cover_image_base64: coverDataUrl
-          ? coverDataUrl.includes(",")
-            ? coverDataUrl.split(",", 2)[1]
-            : coverDataUrl
-          : undefined,
+        cover_image_base64: coverIsNew ? coverDataUrl!.split(",", 2)[1] : undefined,
         guide: guide ?? undefined,
-      });
+      };
+      const saved = editId
+        ? await api.updateListing(editId, payload)
+        : await api.createListing(payload);
       for (const data of extraPhotos) {
         const b64 = data.includes(",") ? data.split(",", 2)[1] : data;
         try {
-          await api.addListingPhoto(created.id, { image_base64: b64 });
+          await api.addListingPhoto(saved.id, { image_base64: b64 });
         } catch {
           /* */
         }
@@ -374,7 +476,11 @@ export function SellerProductsPage() {
       setAiHint(null);
       setOcrPriceDetail(null);
       setStep(1);
-      setListingSubmitted(true);
+      if (editId) {
+        navigate("/seller");
+      } else {
+        setListingSubmitted(true);
+      }
     } finally {
       setBusy(false);
     }
@@ -409,7 +515,7 @@ export function SellerProductsPage() {
         </div>
       )}
 
-      <PageHeader badge="공급자 · BETA" title="음성 한 번으로 올리기">
+      <PageHeader badge="공급자 · BETA" title={editId ? "상품 수정" : "음성 한 번으로 올리기"}>
         {displayName}님 · 주 업종{" "}
         <strong>{categoryLabel(sellerSector ?? "rural")}</strong>
       </PageHeader>
@@ -434,9 +540,12 @@ export function SellerProductsPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-[minmax(300px,360px)_minmax(0,1fr)] gap-0 xl:gap-6">
-          <div className="border-b xl:border-b-0 xl:border-r border-slate-100 p-5 sm:p-6 bg-slate-50/50 space-y-0 xl:sticky xl:top-24 xl:self-start xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_1fr_2fr] gap-0 xl:gap-6">
+          <div className="border-b xl:border-b-0 xl:border-r border-slate-100 p-5 sm:p-6 bg-slate-50/50 xl:sticky xl:top-24 xl:self-start xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
             <SellerNoteOcrPanel listingTab={listingTab} onApply={applyOcrDraft} />
+          </div>
+
+          <div className="border-b xl:border-b-0 xl:border-r border-slate-100 p-5 sm:p-6 bg-slate-50/50 xl:sticky xl:top-24 xl:self-start xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
             <SellerVoicePanel step={step} listingTab={listingTab} />
           </div>
 
@@ -579,7 +688,7 @@ export function SellerProductsPage() {
                     </div>
                     <div>
                       {guide ? (
-                        <ListingGuidePreview guide={guide} />
+                        <ListingGuidePreview guide={guide} listingTab={listingTab} title={title} />
                       ) : (
                         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 p-6 text-center text-sm text-slate-500 min-h-[200px] flex items-center justify-center">
                           「소개 + 이용안내 한번에」를 누르면
@@ -597,31 +706,50 @@ export function SellerProductsPage() {
                   <div className="rounded-2xl border border-sky-100 bg-sky-50/50 p-4 space-y-3">
                     <p className="font-semibold text-slate-800">대표 사진</p>
                     <p className="text-sm text-slate-600">
-                      「사진 만들어 줘」라고 말씀하거나 버튼을 누르세요.
+                      사진 파일을 직접 올리거나, AI로 만들 수 있어요.
                     </p>
-                    <div>
-                      <label className="text-sm text-slate-600">어떤 장면? (선택)</label>
+
+                    {/* 직접 업로드 — AI 없이도 항상 가능 */}
+                    <label className="inline-block">
+                      <span className="btn-primary py-2.5 px-4 cursor-pointer inline-block">
+                        내 사진 올리기
+                      </span>
                       <input
-                        className="input-field mt-1"
-                        value={imagePromptKo}
-                        onChange={(e) => setImagePromptKo(e.target.value)}
-                        placeholder={
-                          imagePromptKo.trim() ||
-                          "예: 산지 고사리, 자연광 아래 정갈한 포장"
-                        }
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => onPickCover(e.target.files)}
                       />
+                    </label>
+
+                    {/* AI 생성 — 서버에 OpenAI 키가 있을 때만 */}
+                    <div className="rounded-xl border border-slate-200 bg-white/70 p-3 space-y-2">
+                      <p className="text-sm font-semibold text-slate-700">또는 AI로 만들기</p>
+                      <div>
+                        <label className="text-sm text-slate-600">어떤 장면? (선택)</label>
+                        <input
+                          className="input-field mt-1"
+                          value={imagePromptKo}
+                          onChange={(e) => setImagePromptKo(e.target.value)}
+                          placeholder={
+                            imagePromptKo.trim() ||
+                            "예: 산지 고사리, 자연광 아래 정갈한 포장"
+                          }
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-primary py-2.5 px-4 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={busy || aiBusy}
+                        onClick={() => void generateCoverAi()}
+                      >
+                        {aiBusy ? "그리는 중…" : "AI로 대표 사진 만들기"}
+                      </button>
+                      {promptSummary ? (
+                        <p className="text-sm text-shop-tealDark">{promptSummary}</p>
+                      ) : null}
                     </div>
-                    <button
-                      type="button"
-                      className="btn-primary py-2.5 px-4"
-                      disabled={busy || aiBusy}
-                      onClick={() => void generateCoverAi()}
-                    >
-                      {aiBusy ? "그리는 중…" : "AI로 대표 사진 만들기"}
-                    </button>
-                    {promptSummary ? (
-                      <p className="text-sm text-shop-tealDark">{promptSummary}</p>
-                    ) : null}
+
                     {coverDataUrl ? (
                       <div className="rounded-xl overflow-hidden border max-w-sm">
                         <img src={coverDataUrl} alt="대표 사진" className="w-full aspect-[16/10] object-cover" />
@@ -732,7 +860,13 @@ export function SellerProductsPage() {
                     disabled={busy || aiBusy}
                     onClick={() => void onSubmit()}
                   >
-                    {busy ? "올리는 중…" : "쇼핑에 올리기"}
+                    {busy
+                      ? editId
+                        ? "저장 중…"
+                        : "올리는 중…"
+                      : editId
+                        ? "수정 저장"
+                        : "쇼핑에 올리기"}
                   </button>
                 )}
               </div>

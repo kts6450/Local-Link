@@ -130,6 +130,8 @@ export function ListingDetailPage() {
   const [checkIn, setCheckIn] = useState<Date | null>(null);
   const [checkOut, setCheckOut] = useState<Date | null>(null);
   const [bookedDates, setBookedDates] = useState<Set<string>>(new Set());
+  const [capacity, setCapacity] = useState<number | null>(null);
+  const [bookedCounts, setBookedCounts] = useState<Record<string, number>>({});
   const [reviewSummary, setReviewSummary] = useState<{ count: number; average: number }>({
     count: 0,
     average: 0,
@@ -138,11 +140,21 @@ export function ListingDetailPage() {
 
   useEffect(() => {
     if (!listing) return;
-    if (listing.kind === "lodging") {
+    const needsCalendar =
+      listing.kind === "lodging" || listing.category === "experience";
+    if (needsCalendar) {
       void api
         .getListingBookings(listing.id)
-        .then((r) => setBookedDates(new Set(r.booked_dates)))
-        .catch(() => setBookedDates(new Set()));
+        .then((r) => {
+          setBookedDates(new Set(r.booked_dates));
+          setCapacity(r.capacity);
+          setBookedCounts(r.booked_counts ?? {});
+        })
+        .catch(() => {
+          setBookedDates(new Set());
+          setCapacity(null);
+          setBookedCounts({});
+        });
     }
     void api
       .getReviews(listing.id)
@@ -188,9 +200,18 @@ export function ListingDetailPage() {
   }
 
   const isLodging = listing.kind === "lodging";
+  const isExperience = listing.kind !== "lodging" && listing.category === "experience";
   const photo = photoList[photoIndex] ?? listingCoverPhoto(listing);
   const views = listingDemoViewCount(listing.id);
-  const areaLabel = listing.kind === "product" ? "특산·상품" : "숙박·민박";
+  const areaLabel = isLodging ? "숙박·민박" : isExperience ? "체험·클래스" : "특산·상품";
+
+  // 체험: 선택한 날짜의 남은 정원 (capacity - 그날 확정 예약수).
+  const selectedIso = checkIn ? toIsoDate(checkIn) : null;
+  const expRemaining =
+    capacity != null && selectedIso
+      ? Math.max(0, capacity - (bookedCounts[selectedIso] ?? 0))
+      : null;
+  const expMax = expRemaining != null ? Math.max(1, expRemaining) : maxGuests;
 
   const ratingDisplay = reviewSummary.count > 0 ? reviewSummary.average.toFixed(1) : "—";
 
@@ -221,9 +242,27 @@ export function ListingDetailPage() {
       alert("체크인·체크아웃 날짜를 선택해 주세요.");
       return;
     }
-    add(listing.id, Math.max(1, guests), {
+    // 숙박가는 1박 기준이므로 수량 = 박 수(인원 아님). 인원은 정원 안내용.
+    const nightCount = diffDays(checkIn, checkOut);
+    add(listing.id, Math.max(1, nightCount), {
       stay_start: toIsoDate(checkIn),
       stay_end: toIsoDate(checkOut),
+    });
+  };
+
+  const addExperience = () => {
+    if (!checkIn) {
+      alert("체험 날짜를 선택해 주세요.");
+      return;
+    }
+    if (expRemaining != null && guests > expRemaining) {
+      alert(`이 날짜는 남은 자리가 ${expRemaining}명입니다.`);
+      return;
+    }
+    // 체험은 단일 날짜 예약 — stay_start == stay_end, 수량 = 인원.
+    add(listing.id, Math.max(1, guests), {
+      stay_start: toIsoDate(checkIn),
+      stay_end: toIsoDate(checkIn),
     });
   };
 
@@ -355,13 +394,19 @@ export function ListingDetailPage() {
                       / 1박 기준
                     </span>
                   )}
+                  {isExperience && (
+                    <span className="text-lg sm:text-xl font-semibold text-slate-500">
+                      {" "}
+                      / 1인 기준
+                    </span>
+                  )}
                 </p>
                 <ListingInfoSections listing={listing} />
               </div>
             )}
             {tab === "guide" && (
               <div className="space-y-8 sm:space-y-10 overflow-visible">
-                <ListingUsageGuideSections guide={listing.guide} />
+                <ListingUsageGuideSections guide={listing.guide} listing={listing} />
                 <ListingLocalGuide listing={listing} />
               </div>
             )}
@@ -462,6 +507,97 @@ export function ListingDetailPage() {
                 type="button"
                 className="btn-shop w-full text-lg py-4 rounded-xl"
                 onClick={addLodgingToCart}
+              >
+                예약하기
+              </button>
+            </>
+          ) : isExperience ? (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  className="btn-shop-outline px-3 py-2 text-sm"
+                  onClick={() =>
+                    setMonthCursor(
+                      new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1)
+                    )
+                  }
+                >
+                  이전
+                </button>
+                <button
+                  type="button"
+                  className="btn-shop-outline px-3 py-2 text-sm"
+                  onClick={() =>
+                    setMonthCursor(
+                      new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1)
+                    )
+                  }
+                >
+                  다음
+                </button>
+              </div>
+              <MonthCalendar
+                month={monthCursor}
+                checkIn={checkIn}
+                checkOut={checkIn}
+                bookedDates={bookedDates}
+                onSelect={(d) => {
+                  setCheckIn(d);
+                  setCheckOut(d);
+                  if (capacity != null) {
+                    const rem = Math.max(1, capacity - (bookedCounts[toIsoDate(d)] ?? 0));
+                    setGuests((g) => Math.min(g, rem));
+                  }
+                }}
+              />
+              <div className="text-sm rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-1">
+                <p>
+                  체험일: <strong>{checkIn ? toIsoDate(checkIn) : "날짜 선택"}</strong>
+                </p>
+                {capacity != null ? (
+                  <p className="text-shop-tealDark font-semibold">
+                    정원 {capacity}명
+                    {expRemaining != null ? ` · 남은 자리 ${expRemaining}명` : ""}
+                  </p>
+                ) : null}
+              </div>
+              <p className="text-xs text-slate-500 leading-snug">
+                원하는 체험 날짜를 선택하세요. 회색은 마감(정원 초과)·지난 날짜입니다.
+              </p>
+
+              <div>
+                <p className="text-sm font-semibold text-slate-700 mb-2">인원 선택</p>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    className="w-11 h-11 rounded-xl border border-slate-200 font-bold text-lg hover:bg-slate-50"
+                    onClick={() => setGuests((g) => Math.max(1, g - 1))}
+                  >
+                    −
+                  </button>
+                  <span className="flex-1 text-center text-xl font-bold">{guests}명</span>
+                  <button
+                    type="button"
+                    className="w-11 h-11 rounded-xl border border-slate-200 font-bold text-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    disabled={guests >= expMax}
+                    onClick={() => setGuests((g) => Math.min(expMax, g + 1))}
+                  >
+                    +
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  1인 {listing.price.toLocaleString()}원 · 총{" "}
+                  <strong className="text-shop-tealDark">
+                    {(listing.price * guests).toLocaleString()}원
+                  </strong>
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="btn-shop w-full text-lg py-4 rounded-xl"
+                onClick={addExperience}
               >
                 예약하기
               </button>

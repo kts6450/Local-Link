@@ -32,6 +32,17 @@ function mergeAbortSignals(primary: AbortSignal, secondary?: AbortSignal): Abort
   return c.signal;
 }
 
+/** 실패 응답에서 백엔드 detail 메시지를 뽑아낸다(없으면 fallback). */
+async function errorDetail(res: Response, fallback: string): Promise<string> {
+  try {
+    const j = (await res.json()) as { detail?: string };
+    if (j?.detail) return j.detail;
+  } catch {
+    /* 본문 파싱 실패 시 fallback */
+  }
+  return fallback;
+}
+
 async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
   const deadline = new AbortController();
   const tid = setTimeout(() => deadline.abort(), FETCH_DEADLINE_MS);
@@ -411,8 +422,39 @@ export const api = {
     return res.json() as Promise<{ ok: boolean }>;
   },
 
+  updateListing: async (
+    id: string,
+    body: {
+      kind: "product" | "lodging";
+      category?: string;
+      seller_id?: string;
+      title: string;
+      description: string;
+      price: number;
+      location: string;
+      emoji?: string | null;
+      stock?: number | null;
+      max_guests?: number | null;
+      cover_image_base64?: string | null;
+      guide?: ListingGuide | null;
+    }
+  ): Promise<Listing> => {
+    const res = await fetch(`/api/marketplace/listings/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ ...body, seller_id: body.seller_id ?? "seller-local" }),
+    });
+    if (!res.ok) throw new Error(await errorDetail(res, "수정에 실패했습니다."));
+    return res.json();
+  },
+
   createOrder: async (body: {
-    items: { listing_id: string; quantity: number }[];
+    items: {
+      listing_id: string;
+      quantity: number;
+      stay_start?: string | null;
+      stay_end?: string | null;
+    }[];
     buyer_name: string;
     buyer_phone: string;
     stay_start?: string | null;
@@ -437,7 +479,11 @@ export const api = {
   },
 
   getListingBookings: (listingId: string) =>
-    getJson<{ booked_dates: string[] }>(`/api/marketplace/listings/${listingId}/bookings`),
+    getJson<{
+      booked_dates: string[];
+      capacity: number | null;
+      booked_counts: Record<string, number>;
+    }>(`/api/marketplace/listings/${listingId}/bookings`),
 
   addListingPhoto: (listingId: string, body: { image_base64?: string; url?: string }) =>
     postJson<ListingPhoto>(`/api/marketplace/listings/${listingId}/photos`, body),
@@ -456,7 +502,7 @@ export const api = {
       method: "POST",
       headers: authHeaders(),
     });
-    if (!res.ok) throw new Error(`mockPay ${res.status}`);
+    if (!res.ok) throw new Error(await errorDetail(res, "결제에 실패했습니다."));
     return res.json();
   },
 
@@ -465,7 +511,7 @@ export const api = {
       method: "POST",
       headers: authHeaders(),
     });
-    if (!res.ok) throw new Error(`cardPayDemo ${res.status}`);
+    if (!res.ok) throw new Error(await errorDetail(res, "결제에 실패했습니다."));
     return res.json();
   },
 
@@ -473,12 +519,16 @@ export const api = {
     audio: Blob,
     history: Turn[],
     mode: VoiceMode,
-    timeoutMs = 120_000
+    timeoutMs = 120_000,
+    formState?: Record<string, unknown>
   ): Promise<VoiceTurnResponse> => {
     const fd = new FormData();
     fd.append("audio", audio, "speech.wav");
     fd.append("history", JSON.stringify(history));
     fd.append("mode", mode);
+    if (formState && Object.keys(formState).length > 0) {
+      fd.append("form_state", JSON.stringify(formState));
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {

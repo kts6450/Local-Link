@@ -71,16 +71,19 @@ export function CheckoutPage() {
     setBusy(true);
     setPaid(null);
     try {
-      const lodgingRow = rows.find((r) => r.listing.kind === "lodging");
+      // 숙박 체크인/아웃 또는 체험 예약일을 주문에 싣는다.
+      const datedRow = rows.find((r) => r.line.stay_start);
       const order = await api.createOrder({
         items: rows.map((r) => ({
           listing_id: r.line.listingId,
           quantity: r.line.quantity,
+          stay_start: r.line.stay_start ?? null,
+          stay_end: r.line.stay_end ?? null,
         })),
         buyer_name: name.trim(),
         buyer_phone: phone.trim(),
-        stay_start: lodgingRow?.line.stay_start ?? null,
-        stay_end: lodgingRow?.line.stay_end ?? null,
+        stay_start: datedRow?.line.stay_start ?? null,
+        stay_end: datedRow?.line.stay_end ?? null,
       });
       const settled =
         payMode === "card" ? await api.cardPayDemo(order.id) : await api.mockPay(order.id);
@@ -173,7 +176,11 @@ export function CheckoutPage() {
                 <span className="text-4xl">{listing.emoji}</span>
                 <div className="flex-1 min-w-[200px]">
                   <p className="font-bold text-lg">{listing.title}</p>
-                  {line.stay_start && line.stay_end ? (
+                  {listing.category === "experience" && line.stay_start ? (
+                    <p className="text-xs text-shop-tealDark font-semibold">
+                      체험일 {line.stay_start} · {line.quantity}명
+                    </p>
+                  ) : line.stay_start && line.stay_end ? (
                     <p className="text-xs text-shop-tealDark font-semibold">
                       체크인 {line.stay_start} · 체크아웃 {line.stay_end}
                     </p>
@@ -186,7 +193,12 @@ export function CheckoutPage() {
                       className="w-16 ml-1 rounded-lg border border-hades-line px-2 py-1 text-center"
                       value={line.quantity}
                       onChange={(e) =>
-                        setQty(line.listingId, parseInt(e.target.value, 10) || 1)
+                        setQty(
+                          line.listingId,
+                          parseInt(e.target.value, 10) || 1,
+                          line.stay_start,
+                          line.stay_end
+                        )
                       }
                     />
                   </p>
@@ -197,7 +209,7 @@ export function CheckoutPage() {
                 <button
                   type="button"
                   className="text-sm text-red-600 font-semibold"
-                  onClick={() => remove(line.listingId)}
+                  onClick={() => remove(line.listingId, line.stay_start, line.stay_end)}
                 >
                   빼기
                 </button>

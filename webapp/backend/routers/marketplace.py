@@ -17,8 +17,6 @@ from services.listing_ai import (
     enhance_image_prompt,
     generate_listing_cover_png,
     generate_listing_description,
-    image_models_to_try,
-    is_openai_configured,
 )
 from services.listing_package import generate_listing_package
 from services.note_ocr import parse_note_images
@@ -36,6 +34,7 @@ from services.listings_store import (
     get_listing,
     list_best_listings,
     list_listings,
+    update_listing,
 )
 from services.llm import is_configured as anthropic_configured
 from services.seller_extras import (
@@ -126,7 +125,6 @@ def get_listing_local_guide(listing_id: str):
 def feature_flags():
     """과금·외부 API 연동 기능 — 일부는 키가 있으면 활성화."""
     claude = anthropic_configured()
-    openai_ok = is_openai_configured()
     return {
         "items": [
             {
@@ -136,9 +134,9 @@ def feature_flags():
                 "message": (
                     "판매자 화면에서 설명·이미지를 자동 생성할 수 있습니다. "
                     + (
-                        "Claude·OpenAI 키를 넣으면 품질이 좋아집니다."
-                        if not (claude and openai_ok)
-                        else "Claude·OpenAI 키가 설정되어 있습니다."
+                        "대표 이미지는 키 없이 동작하고, Claude 키를 넣으면 설명 품질이 좋아집니다."
+                        if not claude
+                        else "Claude 키가 설정되어 있어 설명 자동 작성이 활성화됩니다."
                     )
                 ),
             },
@@ -188,8 +186,8 @@ def ai_capabilities():
     return {
         "description_ai": True,
         "description_claude": anthropic_configured(),
-        "image_openai": is_openai_configured(),
-        "image_models": image_models_to_try() if is_openai_configured() else [],
+        "image_openai": True,
+        "image_models": ["pollinations-flux"],
         "package_ai": True,
         "package_claude": anthropic_configured(),
     }
@@ -298,11 +296,7 @@ def post_enhance_image_prompt(body: EnhanceImagePromptBody):
 
 @router.post("/ai/draft-image")
 def post_draft_image(body: DraftImageBody):
-    if not is_openai_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="이미지 생성은 OPENAI_API_KEY 가 필요합니다.",
-        )
+    """대표 이미지 생성 — Pollinations Flux 단독, 키 불필요."""
     try:
         png, prompt_used = generate_listing_cover_png(
             body.kind,
@@ -314,12 +308,12 @@ def post_draft_image(body: DraftImageBody):
         )
     except Exception as e:
         raise HTTPException(
-            status_code=503,
-            detail=f"이미지 생성 실패: {e}",
+            status_code=502,
+            detail=f"사진 생성 중에 문제가 있었습니다: {e}",
         ) from e
     return {
         "image_base64": base64.b64encode(png).decode("ascii"),
-        "mime_type": "image/png",
+        "mime_type": "image/jpeg",
         "prompt_used": prompt_used,
     }
 
@@ -410,6 +404,24 @@ def post_listing(body: ListingCreate, user: dict = Depends(get_current_user)):
     return create_listing(data)
 
 
+@router.put("/listings/{listing_id}")
+def put_listing(listing_id: str, body: ListingCreate, user: dict = Depends(get_current_user)):
+    if user.get("role") not in ("seller", "master"):
+        raise HTTPException(status_code=403, detail="공급자 로그인이 필요합니다.")
+    existing = get_listing(listing_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="listing not found")
+    if user.get("role") == "seller" and existing.get("seller_id") != user.get("seller_id"):
+        raise HTTPException(status_code=403, detail="본인 상품만 수정할 수 있습니다.")
+    data = body.model_dump()
+    if user.get("role") == "seller":
+        data["seller_id"] = user.get("seller_id") or data.get("seller_id")
+    updated = update_listing(listing_id, data)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="listing not found")
+    return updated
+
+
 class ListingPhotoBody(BaseModel):
     image_base64: str | None = Field(default=None, max_length=9_000_000)
     url: str | None = Field(default=None, max_length=2000)
@@ -473,43 +485,13 @@ def remove_listing_photo(
 
 @router.get("/listings/{listing_id}/bookings")
 def get_listing_bookings(listing_id: str):
-    """예약된 날짜 목록 (체크인 포함, 체크아웃 제외). 숙박만."""
+    """예약 불가 날짜 + (체험) 정원·날짜별 예약수. 결제 완료(미취소) 주문 기준."""
     existing = get_listing(listing_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="listing not found")
-    if existing.get("kind") != "lodging":
-        return {"booked_dates": []}
-    from datetime import date
+    from services.orders_store import listing_availability
 
-    from db.database import SessionLocal as _S
-    from db.models import OrderRow as _OR
-    from sqlalchemy import select as _select
-
-    booked: set[str] = set()
-    today = date.today().isoformat()
-    with _S() as session:
-        orders = session.scalars(
-            _select(_OR).where(_OR.fulfillment_status.in_(("preparing", "shipping", "completed")))
-        ).all()
-        for o in orders:
-            if not o.stay_start or not o.stay_end:
-                continue
-            if o.stay_end < today:
-                continue
-            try:
-                import json as _json
-
-                items = _json.loads(o.items_json or "[]")
-            except ValueError:
-                items = []
-            if not any(it.get("listing_id") == listing_id for it in items):
-                continue
-            cur = date.fromisoformat(o.stay_start)
-            end = date.fromisoformat(o.stay_end)
-            while cur < end:
-                booked.add(cur.isoformat())
-                cur = date.fromordinal(cur.toordinal() + 1)
-    return {"booked_dates": sorted(booked)}
+    return listing_availability(existing)
 
 
 @router.delete("/listings/{listing_id}")

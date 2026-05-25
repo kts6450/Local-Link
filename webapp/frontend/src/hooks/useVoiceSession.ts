@@ -70,7 +70,15 @@ export function useVoiceSession() {
         return;
       }
 
-      const result = await api.voiceTurn(blob, history, "seller");
+      // 폼에 이미 채워진 값(OCR/직접 입력)을 LLM 이 알 수 있도록 함께 전송.
+      const formSnapshot = useSellerFormVoice.getState().snapshotForm();
+      const result = await api.voiceTurn(
+        blob,
+        history,
+        "seller",
+        undefined,
+        formSnapshot as unknown as Record<string, unknown>
+      );
 
       if (result.user_text) appendUser(result.user_text);
       appendAssistant(result.reply);
@@ -82,6 +90,13 @@ export function useVoiceSession() {
         await useSellerFormVoice.getState().runAction("ai_write");
       } else if (intent === "ai_image") {
         await useSellerFormVoice.getState().runAction("ai_image");
+      } else if (intent === "ocr_note") {
+        // 노트 OCR 패널을 시각적으로 강조하고 안내 메시지 추가.
+        // (파일 입력은 브라우저 보안상 사용자 클릭이 필요해서 자동 트리거 불가)
+        useSellerFormVoice.getState().setHighlight("note_ocr");
+        appendAssistant(
+          "네, 화면 왼쪽 「노트 사진으로 채우기」 칸에서 사진을 골라 주세요. 사진을 읽어 자동으로 채워 드릴게요."
+        );
       }
 
       const merged = useConversation.getState().slots;
@@ -206,6 +221,15 @@ export function useVoiceSession() {
 
 function voiceIntentFromText(text: string): string | null {
   const t = (text || "").trim();
+  // OCR(노트 사진으로 채우기)을 가장 먼저 잡는다 — "사진" 키워드가 ai_image 와
+  // 충돌할 수 있으므로 더 구체적인 패턴을 우선.
+  if (
+    /(노트|메모|수첩|적어\s*둔|적힌)\s*사진/.test(t) ||
+    /사진(으|을|로)?\s*(보고|읽고|읽어|채워|채우|올려|입력)/.test(t) ||
+    /OCR/i.test(t)
+  ) {
+    return "ocr_note";
+  }
   if (/AI|글\s*써|소개\s*글|설명\s*써|설명\s*만들|한번에\s*써/i.test(t)) return "ai_write";
   if (/(사진|이미지|그림|대표\s*사진)/i.test(t) && /(만들|그려|생성|찍)/i.test(t)) {
     return "ai_image";

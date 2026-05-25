@@ -74,7 +74,7 @@ export function SellerListingCard({ listing, salesCount = 0, onRemove }: Props) 
 
       <div className="px-5 sm:px-6 pb-5 sm:pb-6 flex gap-2">
         <Link
-          to="/seller/products"
+          to={`/seller/products?edit=${listing.id}`}
           className="flex-1 text-center rounded-full bg-brand-ink text-white text-sm font-bold py-3 hover:bg-brand-ink/90 active:scale-[0.98] transition-all no-underline"
         >
           수정

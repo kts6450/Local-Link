@@ -205,6 +205,65 @@ def create_listing(record: dict) -> dict:
     return item
 
 
+def update_listing(listing_id: str, record: dict) -> dict | None:
+    """기존 listing 수정. 전달된 필드만 반영하며, 새 커버 이미지가 없으면 기존 유지."""
+    record = dict(record)
+    cover_b64 = record.pop("cover_image_base64", None)
+    has_guide = "guide" in record
+    guide_raw = record.pop("guide", None)
+
+    with SessionLocal() as session:
+        row = session.get(ListingRow, listing_id)
+        if row is None:
+            return None
+
+        if record.get("kind") in ("product", "lodging"):
+            row.kind = record["kind"]
+        if "category" in record:
+            cat = (record.get("category") or "").strip()
+            if cat in ("experience", "rural", "fishing", "craft", "leisure", "lodging"):
+                row.category = cat
+        if record.get("title") is not None and str(record["title"]).strip():
+            row.title = str(record["title"]).strip()
+        if record.get("description") is not None:
+            row.description = str(record["description"]).strip()
+        if record.get("price") is not None:
+            row.price = int(record["price"] or 0)
+        if record.get("emoji"):
+            row.emoji = record["emoji"]
+        if record.get("location") is not None:
+            row.location = str(record["location"]).strip()
+
+        # kind 에 맞춰 재고/정원 정리
+        if row.kind == "lodging":
+            row.stock = None
+            if record.get("max_guests") is not None:
+                row.max_guests = int(record["max_guests"])
+            elif row.max_guests is None:
+                row.max_guests = 4
+        else:
+            row.max_guests = None
+            if record.get("stock") is not None:
+                row.stock = int(record["stock"])
+
+        if has_guide:
+            row.guide_json = guide_to_json(guide_raw if isinstance(guide_raw, dict) else None)
+
+        cover_bytes = _decode_cover_b64(cover_b64)
+        if cover_bytes:
+            _COVERS_DIR.mkdir(parents=True, exist_ok=True)
+            cover_file_path(listing_id).write_bytes(cover_bytes)
+            row.cover_image_url = f"/api/marketplace/covers/{listing_id}"
+
+        session.commit()
+        agg = _review_aggregates(session, [listing_id])
+        avg, cnt = agg.get(listing_id, (0.0, 0))
+        result = _row_to_dict(row, rating=avg, review_count=cnt)
+
+    bump_listings_version()
+    return result
+
+
 def delete_listing(listing_id: str) -> bool:
     with SessionLocal() as session:
         row = session.get(ListingRow, listing_id)

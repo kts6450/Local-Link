@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { api } from "../../lib/api";
 import type { ListingTab, OcrListingDraft } from "../../lib/listingTabs";
 import { tabLabel } from "../../lib/listingTabs";
+import { useSellerFormVoice } from "../../store/sellerFormVoice";
 
 const FIELD_LABELS: Record<string, string> = {
   title: "이름",
@@ -14,7 +15,28 @@ const FIELD_LABELS: Record<string, string> = {
   customer_name: "고객명",
   date_time: "날짜·시간",
   contact_phone: "연락처",
+  highlights: "판매 특장점",
 };
+
+// 영어/기술 용어가 섞인 LLM 메시지를 어르신이 알아보기 쉬운 한국어로 바꿔 보여준다.
+const FRIENDLY_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bprice\b/gi, "가격"],
+  [/\bnotes?\b/gi, "메모"],
+  [/\bdescription\b/gi, "설명"],
+  [/\bquantity\b/gi, "수량"],
+  [/\blocation\b/gi, "지역"],
+  [/\btitle\b/gi, "이름"],
+  [/\bhighlights?\b/gi, "특장점"],
+  [/업데이트/g, "정리"],
+];
+
+function humanize(text: string): string {
+  let out = text;
+  for (const [re, rep] of FRIENDLY_REPLACEMENTS) {
+    out = out.replace(re, rep);
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
 
 type Props = {
   listingTab: ListingTab;
@@ -27,6 +49,8 @@ export function SellerNoteOcrPanel({ listingTab, onApply }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<OcrListingDraft | null>(null);
   const [previews, setPreviews] = useState<string[]>([]);
+  // 음성 도우미가 "노트 사진으로 채워줘" 의도를 잡으면 이 패널이 잠깐 깜빡인다.
+  const highlighted = useSellerFormVoice((s) => s.highlight === "note_ocr");
 
   const onPick = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -76,7 +100,13 @@ export function SellerNoteOcrPanel({ listingTab, onApply }: Props) {
   };
 
   return (
-    <div className="rounded-3xl border border-amber-200/90 bg-gradient-to-b from-amber-50/90 to-white p-5 sm:p-6 shadow-sm mb-5">
+    <div
+      className={`rounded-3xl border p-5 sm:p-6 shadow-sm mb-5 transition-[box-shadow,transform,border-color] duration-300 ${
+        highlighted
+          ? "border-amber-400 bg-gradient-to-b from-amber-100 to-amber-50/60 shadow-[0_0_0_4px_rgba(245,158,11,0.25)] animate-pulse"
+          : "border-amber-200/90 bg-gradient-to-b from-amber-50/90 to-white"
+      }`}
+    >
       <div className="flex items-center gap-3 mb-3">
         <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100 text-2xl">
           📷
@@ -131,6 +161,44 @@ export function SellerNoteOcrPanel({ listingTab, onApply }: Props) {
               신뢰도 {Math.round((draft.confidence_overall || 0) * 100)}%
             </span>
           </div>
+
+          {draft.a2a_steps && draft.a2a_steps.length > 0 && (
+            <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-3 py-2 space-y-1">
+              <p className="text-sm font-semibold text-emerald-800">
+                ✅ AI가 한 번 더 살펴봤어요
+              </p>
+              {draft.a2a_steps.flatMap((s) => s.applied ?? []).length > 0 && (
+                <p className="text-xs text-emerald-900/80">
+                  바로잡은 항목:{" "}
+                  {Array.from(
+                    new Set(
+                      draft.a2a_steps.flatMap((s) =>
+                        (s.applied ?? []).map(
+                          (k) => FIELD_LABELS[k] ?? k
+                        )
+                      )
+                    )
+                  ).join(", ")}
+                </p>
+              )}
+              {draft.a2a_steps.flatMap((s) => s.fixes ?? []).length > 0 && (
+                <ul className="text-xs text-emerald-900/80 list-disc pl-5 space-y-0.5">
+                  {Array.from(
+                    new Set(
+                      draft.a2a_steps
+                        .flatMap((s) => s.fixes ?? [])
+                        .map((f) => humanize(String(f)))
+                        .filter(Boolean)
+                    )
+                  )
+                    .slice(0, 3)
+                    .map((f, i) => (
+                      <li key={i}>{f}</li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {draft.warnings?.map((w, i) => (
             <p key={i} className="text-xs text-amber-900 bg-amber-50 rounded-lg px-3 py-2">

@@ -23,6 +23,8 @@ router = APIRouter(prefix="/api/orders", tags=["orders"])
 class OrderItemIn(BaseModel):
     listing_id: str
     quantity: int = Field(ge=1, le=999)
+    stay_start: str | None = Field(default=None, max_length=10)
+    stay_end: str | None = Field(default=None, max_length=10)
 
 
 class OrderCreate(BaseModel):
@@ -98,7 +100,10 @@ def pay_mock(order_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="order not found")
     if user.get("role") == "consumer" and order.get("buyer_id") != user.get("id"):
         raise HTTPException(status_code=403, detail="본인 주문만 결제할 수 있습니다.")
-    return mock_pay(order_id)
+    try:
+        return mock_pay(order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post("/{order_id}/card-pay")
@@ -108,7 +113,10 @@ def pay_card_demo(order_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="order not found")
     if user.get("role") == "consumer" and order.get("buyer_id") != user.get("id"):
         raise HTTPException(status_code=403, detail="본인 주문만 결제할 수 있습니다.")
-    return card_pay_demo(order_id)
+    try:
+        return card_pay_demo(order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post("/{order_id}/fulfillment")

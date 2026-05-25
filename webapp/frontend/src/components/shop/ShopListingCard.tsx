@@ -28,6 +28,9 @@ export function ShopListingCard({ listing, onAdd, rank }: Props) {
   const soldOut =
     listing.kind === "product" && listing.stock !== null && listing.stock <= 0;
   const cat = categoryBadge(listing);
+  // 체험·숙박은 날짜/인원 예약이 필요 → 즉시 담기 대신 상세에서 예약.
+  const needsBooking = listing.kind === "lodging" || listing.category === "experience";
+  const statusLabel = soldOut ? "품절" : needsBooking ? "예약가능" : "판매중";
 
   return (
     <article className="group relative bg-white rounded-[1.75rem] border border-brand-line/80 overflow-hidden shadow-card hover:shadow-card-hover hover:-translate-y-1 transition-all duration-300 flex flex-col h-full">
@@ -59,7 +62,7 @@ export function ShopListingCard({ listing, onAdd, rank }: Props) {
             <span
               className={`h-2 w-2 rounded-full ${soldOut ? "bg-hades-muted" : "bg-emerald-500 animate-pulse"}`}
             />
-            {soldOut ? "품절" : "판매중"}
+            {statusLabel}
           </span>
           {listing.location ? (
             <span className="absolute top-4 right-4 rounded-full bg-brand-ink/85 backdrop-blur-sm px-3 py-1.5 text-xs font-bold text-white">
@@ -109,14 +112,23 @@ export function ShopListingCard({ listing, onAdd, rank }: Props) {
         >
           자세히
         </Link>
-        <button
-          type="button"
-          onClick={() => onAdd(listing.id)}
-          disabled={soldOut}
-          className="flex-1 rounded-full border border-brand-line bg-white text-sm font-bold py-3 hover:bg-brand-warm active:scale-[0.98] transition-all text-brand-ink disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          담기
-        </button>
+        {needsBooking ? (
+          <Link
+            to={`/listing/${listing.id}`}
+            className="flex-1 text-center rounded-full border border-brand-line bg-white text-sm font-bold py-3 hover:bg-brand-warm active:scale-[0.98] transition-all text-brand-ink no-underline"
+          >
+            예약
+          </Link>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onAdd(listing.id)}
+            disabled={soldOut}
+            className="flex-1 rounded-full border border-brand-line bg-white text-sm font-bold py-3 hover:bg-brand-warm active:scale-[0.98] transition-all text-brand-ink disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            담기
+          </button>
+        )}
       </div>
     </article>
   );

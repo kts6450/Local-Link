@@ -62,6 +62,16 @@ export type OcrFieldValue = {
   needs_review?: boolean;
 };
 
+export type OcrA2aStep = {
+  agent: string;
+  approved?: boolean;
+  applied?: string[];
+  fixes?: string[];
+  issues?: string[];
+  needs_review_keys?: string[];
+  corrected_location?: string;
+};
+
 export type OcrListingDraft = {
   registration_type: "product" | "reservation" | "order";
   listing_tab: ListingTab;
@@ -70,4 +80,6 @@ export type OcrListingDraft = {
   fields: Record<string, OcrFieldValue>;
   missing_required: string[];
   warnings: string[];
+  a2a_pipeline?: "off" | "rules" | "a2a" | "max" | string;
+  a2a_steps?: OcrA2aStep[];
 };

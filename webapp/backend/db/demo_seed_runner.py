@@ -28,7 +28,12 @@ from .demo_data_reviews import (
     REVIEWER_NAMES,
 )
 from .demo_data_sellers import DEMO_PASSWORD, SELLERS
-from .demo_images import cover_image_for, repair_all_listing_images
+from .demo_images import (
+    cover_image_for,
+    fix_url_if_broken,
+    is_broken_seed_url,
+    repair_broken_listing_images,
+)
 
 
 def _ensure_sellers(session) -> None:
@@ -194,10 +199,12 @@ def seed_demo_marketplace(*, force: bool = False) -> dict[str, int]:
                 price=price,
                 location=location,
                 emoji=item.get("emoji") or "🛒",
-                image=cover_image_for(
+                image=fix_url_if_broken(
+                    item.get("image"),
                     category=cat,
                     kind="product",
                     key=f"{item['seller']}-{title}",
+                    title=title,
                 ),
                 stock=int(item["stock"]),
                 max_guests=None,
@@ -226,10 +233,12 @@ def seed_demo_marketplace(*, force: bool = False) -> dict[str, int]:
                 price=price,
                 location=location,
                 emoji=item.get("emoji") or "🏠",
-                image=cover_image_for(
+                image=fix_url_if_broken(
+                    item.get("image"),
                     category="lodging",
                     kind="lodging",
                     key=f"{item['seller']}-{title}",
+                    title=title,
                 ),
                 stock=None,
                 max_guests=int(item.get("max_guests") or 4),
@@ -258,10 +267,12 @@ def seed_demo_marketplace(*, force: bool = False) -> dict[str, int]:
                 price=price,
                 location=location,
                 emoji=item.get("emoji") or "🎒",
-                image=cover_image_for(
+                image=fix_url_if_broken(
+                    item.get("image"),
                     category="experience",
                     kind="product",
                     key=f"{item['seller']}-{title}",
+                    title=title,
                 ),
                 stock=int(item["stock"]),
                 max_guests=None,
@@ -312,12 +323,75 @@ def repair_demo_guides() -> int:
     return n
 
 
+def _seed_image_index() -> dict[tuple[str, str], dict]:
+    """(seller_id, title) → 시드 원본 이미지/카테고리/kind 조회용 인덱스."""
+    idx: dict[tuple[str, str], dict] = {}
+    for item in PRODUCTS:
+        idx[(item["seller"], item["title"])] = {
+            "image": item.get("image"),
+            "category": item.get("category") or "rural",
+            "kind": "product",
+        }
+    for item in LODGINGS:
+        idx[(item["seller"], item["title"])] = {
+            "image": item.get("image"),
+            "category": "lodging",
+            "kind": "lodging",
+        }
+    for item in EXPERIENCES:
+        idx[(item["seller"], item["title"])] = {
+            "image": item.get("image"),
+            "category": "experience",
+            "kind": "product",
+        }
+    return idx
+
+
+def recompute_demo_listing_images(session) -> int:
+    """모든 데모 listing의 커버 이미지를 시드 데이터 기준으로 다시 계산.
+
+    깨진 URL만 보던 `repair_broken_listing_images`와 달리, 이전 시드가
+    엉뚱한 폴백 이미지로 박아둔 행까지 전부 재평가한다. 시드의 원본
+    큐레이션 URL이 살아있으면 그대로(쌀→쌀), 깨졌으면 키워드 매칭으로.
+    재시드(force) 없이 재시작만으로 최신 매칭 로직이 반영된다.
+    """
+    idx = _seed_image_index()
+    rows = session.scalars(select(ListingRow).where(ListingRow.id.like("demo-%"))).all()
+    n = 0
+    for row in rows:
+        meta = idx.get((row.seller_id, row.title))
+        if meta is None:
+            # 시드에 없는 데모 행(사용자가 제목을 바꿨을 수도) — 깨진 URL만 보정.
+            if is_broken_seed_url(row.cover_image_url):
+                cat = getattr(row, "category", None) or (
+                    "lodging" if row.kind == "lodging" else "rural"
+                )
+                desired = cover_image_for(
+                    category=cat, kind=row.kind, key=row.id, title=row.title or ""
+                )
+                if desired != row.cover_image_url:
+                    row.cover_image_url = desired
+                    n += 1
+            continue
+        desired = fix_url_if_broken(
+            meta["image"],
+            category=meta["category"],
+            kind=meta["kind"],
+            key=f"{row.seller_id}-{row.title}",
+            title=row.title or "",
+        )
+        if desired != row.cover_image_url:
+            row.cover_image_url = desired
+            n += 1
+    return n
+
+
 def repair_demo_images() -> int:
-    """기존 DB listing cover URL을 검증 풀로 교체 (재시드 없이)."""
+    """데모 listing 커버 이미지를 시드 기준으로 재평가 (DB 삭제·재시드 없이)."""
     from services.listing_events import bump_listings_version
 
     with SessionLocal() as session:
-        n = repair_all_listing_images(session)
+        n = recompute_demo_listing_images(session)
         session.commit()
     if n:
         bump_listings_version()

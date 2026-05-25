@@ -79,7 +79,19 @@ def _seller_system() -> str:
   답변: "네, 소개 글을 AI로 채울게요." 처럼 짧게.
 - "사진 만들어줘", "대표 사진", "이미지 그려줘" → intent=ai_image (ready_to_confirm=false).
   이름(title)이 없으면 먼저 이름을 물어보세요.
+- "노트 사진으로 채워줘", "메모 사진으로 적어줘", "사진 보고 채워줘",
+  "수첩 사진 읽어줘", "사진으로 입력할게" 등 → intent=ocr_note (ready_to_confirm=false).
+  답변: "네, 왼쪽 '노트 사진으로 채우기' 칸에서 사진을 골라 주세요." 처럼 짧게.
 - "설명만 짧게" → intent=ai_write (짧은 설명만 원함을 slots에 반영할 필요 없음).
+
+## 슬롯 추출 시 절대 규칙 — 매우 중요
+- "사진", "글", "AI", "노트", "메모", "채워", "써줘", "만들어", "그려", "올려",
+  "등록", "확인" 같은 **명령·도움 요청 단어**가 들어간 발화 전체를
+  title·description·location 슬롯에 **절대 넣지 마세요.**
+- 이런 발화는 intent(ai_write/ai_image/ocr_note)로만 처리하고, 슬롯은 비워 두세요.
+- location 은 「○○도 ○○시 ○○면」 같은 행정구역 표현일 때만 채웁니다.
+  문장 전체나 명령 문구를 그대로 location 으로 넣으면 안 됩니다.
+- 한 turn 안에 정보(이름·가격 등)와 명령이 섞여 있어도, 명령 부분은 슬롯에서 빼세요.
 
 참고로 지금 등록된 다른 물건은 다음과 같습니다.
 {_listing_block()}
@@ -112,7 +124,16 @@ _SELLER_SLOT_SCHEMA = {
     "properties": {
         "intent": {
             "type": "string",
-            "enum": ["register", "confirm", "ai_write", "ai_image", "ask_help", "smalltalk", "other"],
+            "enum": [
+                "register",
+                "confirm",
+                "ai_write",
+                "ai_image",
+                "ocr_note",
+                "ask_help",
+                "smalltalk",
+                "other",
+            ],
         },
         "listing_type": {"type": ["string", "null"], "description": "product or lodging"},
         "title": {"type": ["string", "null"]},
@@ -133,6 +154,80 @@ def _user_utterances_blob(history: list[dict], user_text: str) -> str:
     parts = [m.get("content", "") for m in history if m.get("role") == "user"]
     parts.append(user_text)
     return " ".join(parts).strip()
+
+
+def _form_state_to_seller_slots(form_state: dict) -> dict:
+    """프론트가 보낸 form_state(폼 입력값)를 판매자 슬롯 형식으로 정규화."""
+    out: dict = {}
+    if not isinstance(form_state, dict):
+        return out
+    title = (form_state.get("title") or "").strip() if isinstance(form_state.get("title"), str) else ""
+    if title:
+        out["title"] = title
+    description = (
+        form_state.get("description") or ""
+    ).strip() if isinstance(form_state.get("description"), str) else ""
+    if description:
+        out["description"] = description
+    location = (
+        form_state.get("location") or ""
+    ).strip() if isinstance(form_state.get("location"), str) else ""
+    if location:
+        out["location"] = location
+    price_v = form_state.get("price")
+    if isinstance(price_v, (int, float)) and price_v >= 0:
+        out["price"] = int(price_v)
+    elif isinstance(price_v, str) and price_v.strip().isdigit():
+        out["price"] = int(price_v.strip())
+    listing_tab = form_state.get("listing_tab") or form_state.get("kind")
+    if listing_tab in ("product", "lodging", "experience"):
+        out["kind"] = "lodging" if listing_tab == "lodging" else "product"
+    stock_v = form_state.get("stock")
+    if isinstance(stock_v, (int, float)):
+        out["stock"] = int(stock_v)
+    elif isinstance(stock_v, str) and stock_v.strip().isdigit():
+        out["stock"] = int(stock_v.strip())
+    max_g = form_state.get("max_guests")
+    if isinstance(max_g, (int, float)):
+        out["max_guests"] = int(max_g)
+    return out
+
+
+def _augment_system_with_form_state(
+    system: str, form_state: dict, mode: str
+) -> str:
+    """현재 폼에 채워진 값을 시스템 프롬프트 끝에 컨텍스트로 붙여 준다."""
+    if mode != "seller" or not form_state:
+        return system
+    pieces: list[str] = []
+    title = str(form_state.get("title") or "").strip()
+    if title:
+        pieces.append(f"- 이름(title): {title}")
+    price = form_state.get("price")
+    if isinstance(price, (int, float)) and price >= 0:
+        pieces.append(f"- 가격(price): {int(price):,}원")
+    elif isinstance(price, str) and price.strip().isdigit():
+        pieces.append(f"- 가격(price): {int(price.strip()):,}원")
+    location = str(form_state.get("location") or "").strip()
+    if location:
+        pieces.append(f"- 지역(location): {location}")
+    description = str(form_state.get("description") or "").strip()
+    if description:
+        pieces.append(f"- 소개(description): {description[:200]}")
+    listing_tab = form_state.get("listing_tab") or form_state.get("kind")
+    if listing_tab:
+        pieces.append(f"- 종류(listing_type/kind): {listing_tab}")
+    if not pieces:
+        return system
+    addendum = (
+        "\n\n## 화면 폼에 이미 채워진 값 — 매우 중요\n"
+        "사용자가 OCR(노트 사진), 직접 입력, 이전 음성 등으로 다음 정보를 이미 채웠습니다.\n"
+        "이 값들은 **기존 정보로 인정**하고, 사용자에게 다시 묻지 마세요. 슬롯에도 그대로 보전하세요.\n"
+        "사용자가 이 정보를 명시적으로 바꾸겠다고 말한 경우에만 새 값으로 교체합니다.\n"
+        + "\n".join(pieces)
+        + "\n"
+    )
+    return system + addendum
 
 
 def _is_affirmation(user_text: str) -> bool:
@@ -294,11 +389,19 @@ def _seller_voice_command(user_text: str) -> str | None:
     return None
 
 
-def seller_offline_turn(user_text: str, history: list[dict]) -> dict:
+def seller_offline_turn(
+    user_text: str,
+    history: list[dict],
+    *,
+    form_state: dict | None = None,
+) -> dict:
     """API 키 없을 때 판매자 음성만 규칙으로 처리 (Zero UI 데모 가능)."""
     cmd = _seller_voice_command(user_text)
     blob = _user_utterances_blob(history, user_text)
     slots = _seller_rule_slots_from_blob(blob)
+    # 폼에 이미 채워진 값을 보전한다.
+    baseline = _form_state_to_seller_slots(form_state or {})
+    slots = {**baseline, **{k: v for k, v in slots.items() if v not in (None, "")}}
     slots = normalize_slots_locations(slots)
     if cmd == "ai_write":
         return {
@@ -368,13 +471,23 @@ def seller_offline_turn(user_text: str, history: list[dict]) -> dict:
     }
 
 
-def chat_turn_for_mode(user_text: str, history: list[dict], mode: str) -> dict:
+def chat_turn_for_mode(
+    user_text: str,
+    history: list[dict],
+    mode: str,
+    *,
+    form_state: dict | None = None,
+) -> dict:
     if mode not in ("consumer", "seller"):
         mode = "consumer"
 
+    form_state = form_state or {}
+
     if not is_configured():
         if mode == "seller":
-            return seller_offline_turn(user_text, list(history or []))
+            return seller_offline_turn(
+                user_text, list(history or []), form_state=form_state
+            )
         return {
             "reply": "지금은 음성 도우미가 잠시 쉬고 있어요. 화면에서 눌러 주세요.",
             "slots": {},
@@ -386,7 +499,10 @@ def chat_turn_for_mode(user_text: str, history: list[dict], mode: str) -> dict:
     messages = list(history) + [{"role": "user", "content": user_text}]
 
     try:
-        system = _consumer_system() if mode == "consumer" else _seller_system()
+        base_system = (
+            _consumer_system() if mode == "consumer" else _seller_system()
+        )
+        system = _augment_system_with_form_state(base_system, form_state, mode)
 
         response = anthropic_messages_create(
             model=DEFAULT_MODEL,
@@ -405,7 +521,9 @@ def chat_turn_for_mode(user_text: str, history: list[dict], mode: str) -> dict:
         reply = anthropic_response_text(response)
     except Exception:
         if mode == "seller":
-            return seller_offline_turn(user_text, list(history or []))
+            return seller_offline_turn(
+                user_text, list(history or []), form_state=form_state
+            )
         return {
             "reply": "잠시 연결이 불안정해요. 다시 한번 말씀해 주시겠어요?",
             "slots": {},
@@ -420,6 +538,12 @@ def chat_turn_for_mode(user_text: str, history: list[dict], mode: str) -> dict:
             schema,
             mode,
         )
+        # 폼에 이미 채워져 있던 값(OCR/직접 입력)을 LLM 결과에 보완해서
+        # "처음부터 다시 묻는" 현상을 막는다. LLM 이 같은 키에 새 값을 채웠다면
+        # 그 값을 우선시한다 (사용자가 방금 말로 바꾼 것일 수 있음).
+        baseline = _form_state_to_seller_slots(form_state) if mode == "seller" else {}
+        merged_slots = {**baseline, **{k: v for k, v in slots.items() if v not in (None, "")}}
+        slots = merged_slots
         slot_pipe = run_slot_pipeline(
             messages + [{"role": "assistant", "content": reply}],
             slots,

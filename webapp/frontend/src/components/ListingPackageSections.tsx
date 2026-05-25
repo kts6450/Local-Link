@@ -88,7 +88,11 @@ function CheckList({
 /** 상품 정보 탭 — 루플형 체험 포인트·STEP */
 export function ListingInfoSections({ listing }: { listing: Listing }) {
   const g = listing.guide;
-  const steps = g?.steps ?? [];
+  const isExperience = listing.kind !== "lodging" && listing.category === "experience";
+  const isMarketProduct = listing.kind === "product" && !isExperience;
+  // 마켓 상품(택배·픽업)에는 시간표가 어울리지 않으므로 숨긴다.
+  const steps = isMarketProduct ? [] : (g?.steps ?? []);
+  const highlightsTitle = isExperience ? "체험 포인트" : "상품 특징";
 
   return (
     <div className="space-y-8">
@@ -100,7 +104,7 @@ export function ListingInfoSections({ listing }: { listing: Listing }) {
 
       {g?.highlights && g.highlights.length > 0 && (
         <section>
-          <h3 className="font-bold text-hades-text text-xl mb-4">체험 포인트</h3>
+          <h3 className="font-bold text-hades-text text-xl mb-4">{highlightsTitle}</h3>
           <ul className="grid gap-3 sm:grid-cols-2">
             {g.highlights.map((h, i) => (
               <li
@@ -149,7 +153,13 @@ export function ListingInfoSections({ listing }: { listing: Listing }) {
 }
 
 /** 이용 안내 탭 — 환불·만남장소·주의 등 */
-export function ListingUsageGuideSections({ guide }: { guide: ListingGuide | null | undefined }) {
+export function ListingUsageGuideSections({
+  guide,
+  listing,
+}: {
+  guide: ListingGuide | null | undefined;
+  listing?: Listing;
+}) {
   if (!guide) {
     return (
       <GuideCard icon="📋" title="이용 안내" variant="cream">
@@ -160,6 +170,16 @@ export function ListingUsageGuideSections({ guide }: { guide: ListingGuide | nul
     );
   }
 
+  const isMarketProduct =
+    !!listing && listing.kind === "product" && listing.category !== "experience";
+
+  // 마켓 상품에는 「만남 장소」, 「인근 관광지」가 어울리지 않으므로 숨긴다.
+  const showMeeting = !isMarketProduct && !!guide.meeting_place;
+  const showNearby = !isMarketProduct && !!guide.nearby && guide.nearby.length > 0;
+  const includedTitle = isMarketProduct ? "함께 보내는 것" : "포함 사항";
+  const notIncludedTitle = isMarketProduct ? "포함되지 않은 것" : "불포함 사항";
+  const precautionsTitle = isMarketProduct ? "보관·취급 안내" : "유의 사항";
+
   const hasLists =
     (guide.included?.length ?? 0) > 0 ||
     (guide.not_included?.length ?? 0) > 0 ||
@@ -167,7 +187,7 @@ export function ListingUsageGuideSections({ guide }: { guide: ListingGuide | nul
 
   return (
     <div className="space-y-5 sm:space-y-6">
-      {guide.meeting_place ? (
+      {showMeeting ? (
         <GuideCard
           icon="📍"
           title="만남 장소"
@@ -181,12 +201,12 @@ export function ListingUsageGuideSections({ guide }: { guide: ListingGuide | nul
       {hasLists ? (
         <div className="grid gap-5 sm:gap-6 lg:grid-cols-2">
           {(guide.included?.length ?? 0) > 0 ? (
-            <GuideCard icon="✅" title="포함 사항" variant="teal">
+            <GuideCard icon="✅" title={includedTitle} variant="teal">
               <CheckList items={guide.included ?? []} tone="included" />
             </GuideCard>
           ) : null}
           {(guide.not_included?.length ?? 0) > 0 ? (
-            <GuideCard icon="🚫" title="불포함 사항" variant="default">
+            <GuideCard icon="🚫" title={notIncludedTitle} variant="default">
               <CheckList items={guide.not_included ?? []} tone="excluded" />
             </GuideCard>
           ) : null}
@@ -194,7 +214,7 @@ export function ListingUsageGuideSections({ guide }: { guide: ListingGuide | nul
       ) : null}
 
       {(guide.precautions?.length ?? 0) > 0 ? (
-        <GuideCard icon="⚠️" title="유의 사항" variant="cream">
+        <GuideCard icon="⚠️" title={precautionsTitle} variant="cream">
           <CheckList items={guide.precautions ?? []} tone="caution" />
         </GuideCard>
       ) : null}
@@ -207,7 +227,7 @@ export function ListingUsageGuideSections({ guide }: { guide: ListingGuide | nul
         </GuideCard>
       ) : null}
 
-      {guide.nearby && guide.nearby.length > 0 ? (
+      {showNearby ? (
         <section className="space-y-4">
           <div className="flex items-center gap-3 px-1">
             <span className="text-2xl" aria-hidden>
@@ -216,7 +236,7 @@ export function ListingUsageGuideSections({ guide }: { guide: ListingGuide | nul
             <h3 className="font-bold text-hades-text text-xl">인근 관광지</h3>
           </div>
           <ul className="grid gap-4 sm:grid-cols-2">
-            {guide.nearby.map((spot, i) => (
+            {(guide.nearby ?? []).map((spot, i) => (
               <li
                 key={i}
                 className="rounded-2xl border border-brand-line bg-white p-5 sm:p-6 shadow-soft overflow-visible"

@@ -54,6 +54,7 @@ async def turn(
     audio: UploadFile = File(...),
     history: str = Form("[]"),
     mode: str = Form("consumer"),
+    form_state: str = Form("{}"),
 ):
     audio_bytes = await audio.read()
     if not audio_bytes:
@@ -70,6 +71,13 @@ async def turn(
             history_list = []
     except json.JSONDecodeError:
         history_list = []
+
+    try:
+        form_state_dict = json.loads(form_state) if form_state else {}
+        if not isinstance(form_state_dict, dict):
+            form_state_dict = {}
+    except json.JSONDecodeError:
+        form_state_dict = {}
 
     correction = correct_asr_text(
         user_text_raw,
@@ -96,7 +104,9 @@ async def turn(
         }
 
     try:
-        result = chat_turn_for_mode(user_text, history_list, mode)
+        result = chat_turn_for_mode(
+            user_text, history_list, mode, form_state=form_state_dict
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -123,7 +133,10 @@ async def text_turn(body: dict):
         raise HTTPException(status_code=400, detail="user_text required")
     mode_raw = body.get("mode") or "consumer"
     mode = mode_raw if mode_raw in ("consumer", "seller") else "consumer"
-    result = chat_turn_for_mode(user_text, history, mode)
+    form_state = body.get("form_state") or {}
+    if not isinstance(form_state, dict):
+        form_state = {}
+    result = chat_turn_for_mode(user_text, history, mode, form_state=form_state)
     result["user_text"] = user_text
     result["tts_url"] = _tts_url(result["reply"])
     return result

@@ -1,4 +1,4 @@
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { HeroCarousel } from "../components/shop/HeroCarousel";
 import { ShopListingCard } from "../components/shop/ShopListingCard";
@@ -13,7 +13,69 @@ import {
   sectionTitle,
   shopSearchParams,
 } from "../lib/shopNavigation";
+import type { Listing } from "../types";
 import { useCart } from "../store/cart";
+
+function CategoryTeaser({
+  title,
+  subtitle,
+  to,
+  items,
+  ctaLabel,
+  emptyText,
+  add,
+}: {
+  title: string;
+  subtitle: string;
+  to: string;
+  items: Listing[];
+  ctaLabel: string;
+  emptyText: string;
+  add: (id: string, qty: number) => void;
+}) {
+  if (items.length === 0) {
+    return (
+      <section>
+        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4 mb-6 sm:mb-8">
+          <div>
+            <p className="eyebrow mb-2">{title}</p>
+            <h2 className="display-2 text-balance">{subtitle}</h2>
+          </div>
+        </div>
+        <div className="card p-12 text-center text-hades-muted">{emptyText}</div>
+      </section>
+    );
+  }
+  const top = items.slice(0, 4);
+  return (
+    <section>
+      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4 mb-6 sm:mb-8">
+        <div>
+          <p className="eyebrow mb-2">{title}</p>
+          <h2 className="display-2 text-balance">{subtitle}</h2>
+        </div>
+        <Link
+          to={to}
+          className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3 text-sm font-bold text-brand-ink hover:bg-brand-warm transition-colors no-underline"
+        >
+          {ctaLabel}
+          <span aria-hidden>→</span>
+        </Link>
+      </div>
+      <ul className="grid gap-6 sm:gap-7 sm:grid-cols-2 lg:grid-cols-4">
+        {top.map((item, i) => (
+          <li
+            key={item.id}
+            className="reveal"
+            style={{ animationDelay: `${Math.min(i, 8) * 50}ms` }}
+          >
+            <ShopListingCard listing={item} onAdd={(id) => add(id, 1)} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 export function ShopPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -21,8 +83,6 @@ export function ShopPage() {
   const { listings, loading } = useListingsPoll();
   const add = useCart((s) => s.add);
 
-  const filtered = filterShopListings(listings, filters);
-  const title = sectionTitle(filters);
   const isLandingView =
     filters.kind === "all" &&
     filters.theme === "all" &&
@@ -31,10 +91,23 @@ export function ShopPage() {
     !filters.minPrice &&
     !filters.maxPrice;
 
+  // 랜딩(기본)에서는 메인 그리드를 특산만 보여 준다 — 체험·스테이는 별도 섹션.
+  const gridFilters = isLandingView
+    ? { ...filters, kind: "product" as const, theme: "market" as const }
+    : filters;
+
+  const filtered = filterShopListings(listings, gridFilters);
+  const title = sectionTitle(filters);
+
   const setQuick = (patch: Partial<typeof filters>) => {
     const qs = shopSearchParams({ ...filters, ...patch });
     setSearchParams(qs ? new URLSearchParams(qs.slice(1)) : {});
   };
+
+  const lodgings = listings.filter((l) => l.kind === "lodging");
+  const experiences = listings.filter(
+    (l) => l.kind !== "lodging" && l.category === "experience"
+  );
 
   return (
     <div className="page-shell pt-6 sm:pt-8 pb-16 sm:pb-24 space-y-12 sm:space-y-16 lg:space-y-20">
@@ -43,13 +116,18 @@ export function ShopPage() {
       <section>
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8 sm:mb-10">
           <div>
-            <p className="eyebrow mb-3">Discover Local</p>
+            <p className="eyebrow mb-3">
+              {isLandingView ? "특산 SHOP" : "Discover Local"}
+            </p>
             <h2 className="display-2 text-balance">
               {isLandingView ? "지역 특산품 둘러보기" : title}
             </h2>
             {isLandingView ? (
               <p className="mt-3 text-base sm:text-lg text-hades-muted max-w-xl leading-relaxed">
-                전국 농어촌 판매자가 직접 올린 신선한 상품을 만나보세요.
+                전국 농어촌 판매자가 직접 올린 신선한 특산품만 모았습니다.
+                <br />
+                숙박은 <Link to="/?kind=lodging&theme=lodging" className="font-semibold text-brand-ink underline">스테이</Link>,
+                {" "}체험·클래스는 <Link to="/?kind=product&theme=experience" className="font-semibold text-brand-ink underline">체험 CLASS</Link> 탭에서 확인하세요.
               </p>
             ) : null}
           </div>
@@ -66,20 +144,18 @@ export function ShopPage() {
               <button
                 type="button"
                 onClick={() => setQuick({ kind: "all", theme: "all", tab: null })}
-                className={
-                  filters.kind === "all" && filters.theme === "all" && !filters.tab
-                    ? "chip-active"
-                    : "chip"
-                }
+                className={isLandingView ? "chip-active" : "chip"}
               >
-                전체
+                특산 전체
               </button>
               <button
                 type="button"
                 onClick={() => setQuick({ kind: "product", theme: "market", tab: null })}
-                className={filters.theme === "market" ? "chip-active" : "chip"}
+                className={
+                  filters.theme === "market" && !isLandingView ? "chip-active" : "chip"
+                }
               >
-                특산
+                특산만 보기
               </button>
               <button
                 type="button"
@@ -90,12 +166,10 @@ export function ShopPage() {
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  setQuick({ kind: "product", theme: "experience", tab: null })
-                }
+                onClick={() => setQuick({ kind: "product", theme: "experience", tab: null })}
                 className={filters.theme === "experience" ? "chip-active" : "chip"}
               >
-                체험
+                체험 CLASS
               </button>
             </div>
             <label className="relative flex-1 lg:max-w-2xl">
@@ -113,8 +187,8 @@ export function ShopPage() {
                 defaultValue={filters.query ?? ""}
                 onChange={(e) => {
                   const v = e.target.value;
-                  window.clearTimeout((window as any).__shopQTimer);
-                  (window as any).__shopQTimer = window.setTimeout(
+                  window.clearTimeout((window as { __shopQTimer?: number }).__shopQTimer);
+                  (window as { __shopQTimer?: number }).__shopQTimer = window.setTimeout(
                     () => setQuick({ query: v }),
                     200
                   );
@@ -158,6 +232,24 @@ export function ShopPage() {
 
       {isLandingView && !loading ? (
         <>
+          <CategoryTeaser
+            title="체험 CLASS"
+            subtitle="현장에서 즐기는 체험·클래스"
+            to="/?kind=product&theme=experience"
+            ctaLabel="체험 전체"
+            items={experiences}
+            emptyText="체험 상품이 곧 등록됩니다."
+            add={add}
+          />
+          <CategoryTeaser
+            title="스테이 STAY"
+            subtitle="지역 호스트가 직접 운영하는 스테이"
+            to="/?kind=lodging&theme=lodging"
+            ctaLabel="스테이 전체"
+            items={lodgings}
+            emptyText="스테이가 곧 등록됩니다."
+            add={add}
+          />
           <BestListings />
           <LandingFeatures />
           <LandingMission />

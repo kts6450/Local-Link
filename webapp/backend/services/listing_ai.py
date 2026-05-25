@@ -1,39 +1,16 @@
-"""판매 글 — AI 상품 설명·대표 이미지 (Claude 설명, OpenAI 이미지)."""
+"""판매 글 — AI 상품 설명 (Claude) · 대표 이미지 (Pollinations Flux)."""
 
 from __future__ import annotations
 
-import base64
 import json
 import os
+import secrets
+import urllib.parse
 
 import httpx
 
-from services.agent_pipeline import audit_listing_copy, verify_image_prompt_a2a
+from services.agent_pipeline import audit_listing_copy
 from services.llm import DEFAULT_MODEL
-
-_DEFAULT_IMAGE_SIZE = "1024x1024"
-# dall-e-3 미지원 계정·프록시가 많아 기본 시도 순서는 2 → 3 → gpt-image-1
-_DEFAULT_IMAGE_MODELS = ("dall-e-2", "dall-e-3", "gpt-image-1")
-
-
-def _openai_api_key() -> str:
-    from services.api_keys import primary_openai_key
-
-    return primary_openai_key()
-
-
-def is_openai_configured() -> bool:
-    from services.api_keys import is_openai_configured as _configured
-
-    return _configured()
-
-
-def image_models_to_try() -> list[str]:
-    """OPENAI_IMAGE_MODEL 이 있으면 그것만, 없으면 dall-e-2 → dall-e-3."""
-    explicit = (os.environ.get("OPENAI_IMAGE_MODEL") or "").strip()
-    if explicit:
-        return [explicit]
-    return list(_DEFAULT_IMAGE_MODELS)
 
 
 def _fallback_description(kind: str, title: str, price: int, location: str) -> str:
@@ -58,8 +35,21 @@ def generate_listing_description(
     if not is_anthropic_configured():
         return _fallback_description(kind, title, price, location)
 
-    kind_ko = "숙박·민박" if kind == "lodging" else "농산·특산품 등 상품"
+    is_market = kind != "lodging" and not _looks_experience(title, "")
+    if kind == "lodging":
+        kind_ko = "숙박·민박"
+    elif is_market:
+        kind_ko = "농산·특산품 등 마켓 상품 (택배·픽업 판매)"
+    else:
+        kind_ko = "체험·축제 프로그램"
     loc = (location or "").strip() or "(지역 미입력)"
+    extra_rule = (
+        "- 마켓 상품이므로 '체험', '체험하다', '견학', '프로그램', '일정' 같은\n"
+        "  단어를 쓰지 마세요. 대신 '맛보세요', '직접 받아보세요', '드셔보세요' 같이\n"
+        "  택배·픽업으로 받는 상품에 어울리는 말로 적습니다.\n"
+        if is_market
+        else ""
+    )
     prompt = f"""다음 정보로 로컬링크 쇼핑몰에 올릴 상품 설명을 써 주세요.
 
 - 종류: {kind_ko}
@@ -72,7 +62,7 @@ def generate_listing_description(
 - 마크다운·글머리·따옴표 장식 없이 본문만.
 - 사실에 없는 구체적 수치·인증·수상은 쓰지 말 것.
 - 지역 특색은 부드럽게 한 번만 언급해도 됨.
-"""
+{extra_rule}"""
 
     response = anthropic_messages_create(
         model=DEFAULT_MODEL,
@@ -83,8 +73,19 @@ def generate_listing_description(
         output_config={"effort": "low"},
     )
     text = anthropic_response_text(response)
-    text = audit_listing_copy(text, title=title, price=price, location=location)
+    text = audit_listing_copy(
+        text,
+        title=title,
+        price=price,
+        location=location,
+        is_market_product=is_market,
+    )
     return text or _fallback_description(kind, title, price, location)
+
+
+def _looks_experience(title: str, description: str) -> bool:
+    blob = f"{title} {description}".lower()
+    return any(h in blob for h in _EXPERIENCE_HINTS)
 
 
 _EXPERIENCE_HINTS = (
@@ -204,174 +205,58 @@ def enhance_image_prompt(
     description: str = "",
     user_hint: str = "",
 ) -> dict:
-    """짧은 한국어 입력 → DALL·E용 영문 프롬프트 (Claude 또는 규칙)."""
-    from services.api_keys import anthropic_messages_create, anthropic_response_text, is_anthropic_configured
+    """짧은 한국어 입력 → 이미지 모델용 영문 프롬프트 (규칙 기반).
 
+    Pollinations Flux 는 한국어를 그대로 받아도 동작하지만, 일관성을 위해
+    규칙 기반 영문 프롬프트를 만들고 사용자 힌트만 끝에 덧붙인다. Claude 호출은
+    제거해 단순화하고 응답 속도를 올렸다.
+    """
     title = (title or "").strip()
     if not title:
         return {"prompt_en": "", "summary_ko": "상품 이름을 먼저 적어 주세요."}
 
-    loc = (location or "").strip() or "(지역 미입력)"
     desc = (description or "").strip()
     hint = (user_hint or "").strip()
-    exp = _is_experience(title, desc, category)
-
-    if not is_anthropic_configured():
-        prompt_en = _fallback_enhance_prompt(
-            kind, title, location, category, desc, hint
-        )
-        summary = (
-            "체험·낚시처럼 보이면 바다·활동 장면으로 잡았습니다."
-            if exp
-            else "특산품이면 상품 사진 스타일로 잡았습니다."
-        )
-        return {"prompt_en": prompt_en, "summary_ko": summary}
-
-    kind_ko = "숙박" if kind == "lodging" else "상품/체험"
-    cat_ko = category
-    prompt = f"""판매자가 로컬링크 마켓에 올릴 대표 사진용 DALL·E 프롬프트를 영어로 작성하세요.
-
-- 종류: {kind_ko}
-- 카테고리: {cat_ko}
-- 이름: {title}
-- 지역: {loc}
-- 설명: {desc or "(없음)"}
-- 판매자가 적은 사진 힌트: {hint or "(없음)"}
-
-중요 규칙:
-1. 이름에 «낚시», «체험», «수확», «투어» 등이 있으면 반드시 그 활동 장면(바다, 배, 낚싯대, 참여)을 묘사할 것.
-2. «우럭 낚시»처럼 체험인데 접시에 생선만 올린 음식 사진은 금지.
-3. 실제 포장 특산품·농산물만 상품 촬영 스타일.
-4. 영문만, 2~4문장, photorealistic, no text, no watermark.
-5. JSON만 출력: {{"prompt_en":"...", "summary_ko":"한국어로 1문장 요약"}}
-"""
-
-    response = anthropic_messages_create(
-        model=DEFAULT_MODEL,
-        max_tokens=500,
-        system="You output only valid JSON for image generation prompts.",
-        messages=[{"role": "user", "content": prompt}],
-        thinking={"type": "disabled"},
-        output_config={"effort": "low"},
+    prompt_en = _fallback_enhance_prompt(
+        kind, title, location, category, desc, hint
     )
-    text = anthropic_response_text(response)
+    if _is_experience(title, desc, category):
+        summary = "체험·활동 장면으로 잡았습니다."
+    elif kind == "lodging":
+        summary = "숙박·민박 장면으로 잡았습니다."
+    else:
+        summary = "특산품 상품 사진 스타일로 잡았습니다."
+    return {"prompt_en": prompt_en, "summary_ko": summary}
 
-    try:
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        data = json.loads(text.strip())
-        prompt_en = str(data.get("prompt_en", "")).strip()
-        summary_ko = str(data.get("summary_ko", "")).strip()
-        if prompt_en:
-            verified, img_meta = verify_image_prompt_a2a(
-                prompt_en,
-                kind=kind,
-                title=title,
-                description=desc,
-                category=category,
-            )
-            summary = summary_ko or "프롬프트를 다듬었습니다."
-            if img_meta.get("steps"):
-                summary += " (장면 검수 완료)"
-            return {
-                "prompt_en": verified[:3800],
-                "summary_ko": summary,
-                "image_pipeline": img_meta,
-            }
-    except json.JSONDecodeError:
-        pass
 
-    prompt_en = _fallback_enhance_prompt(kind, title, location, category, desc, hint)
-    verified, img_meta = verify_image_prompt_a2a(
-        prompt_en, kind=kind, title=title, description=desc, category=category
-    )
-    return {
-        "prompt_en": verified,
-        "summary_ko": "자동으로 장면을 맞춰 적었습니다.",
-        "image_pipeline": img_meta,
+def _pollinations_image(prompt: str, *, seed: int | None = None) -> bytes:
+    """Pollinations.ai Flux — 키 불필요, 1024x1024 PNG/JPEG bytes 반환.
+
+    같은 prompt 라도 호출 시각마다 결과가 달라지도록 seed 를 무작위로 부여한다.
+    """
+    encoded = urllib.parse.quote(prompt[:1500], safe="")
+    url = "https://image.pollinations.ai/prompt/" + encoded
+    params = {
+        "width": "1024",
+        "height": "1024",
+        "nologo": "true",
+        "model": (os.environ.get("POLLINATIONS_MODEL") or "flux").strip(),
+        "enhance": "true",
+        "safe": "true",
+        # 캐시 우회 + 매번 다른 결과를 위해 seed 와 nocache 동시 사용
+        "seed": str(seed if seed is not None else secrets.randbelow(1_000_000_000)),
+        "nocache": "true",
     }
-
-
-def _openai_client(*, key_index: int = 0):
-    from services.api_keys import openai_client
-
-    return openai_client(key_index=key_index)
-
-
-def _is_retryable_openai_error(exc: BaseException) -> bool:
-    msg = str(exc).lower()
-    return (
-        "connection" in msg
-        or "timeout" in msg
-        or "503" in msg
-        or "502" in msg
-        or "429" in msg
-        or "rate limit" in msg
-    )
-
-
-def _model_unavailable(exc: BaseException) -> bool:
-    msg = str(exc).lower()
-    return (
-        "does not exist" in msg
-        or "invalid_value" in msg
-        or "model_not_found" in msg
-        or "unknown model" in msg
-    )
-
-
-def _retry_without_bad_params(exc: BaseException) -> bool:
-    """지원하지 않는 옵션(quality 등)이면 더 단순한 요청으로 재시도."""
-    msg = str(exc).lower()
-    return "unknown parameter" in msg or "unknown_parameter" in msg
-
-
-def _image_generate_attempts(model: str, prompt: str) -> list[dict]:
-    """호환 API·구버전 엔드포인트용 — 최소 파라미터부터 시도."""
-    size = (os.environ.get("OPENAI_IMAGE_SIZE") or _DEFAULT_IMAGE_SIZE).strip()
-    base: dict = {
-        "model": model,
-        "prompt": prompt[:3800],
-        "size": size,
-        "n": 1,
-    }
-    attempts = [dict(base)]
-    if model.startswith("dall-e-3"):
-        quality = (os.environ.get("OPENAI_IMAGE_QUALITY") or "standard").strip()
-        attempts.insert(0, {**base, "quality": quality})
-    return attempts
-
-
-def _generate_image(client, model: str, prompt: str):
-    attempts = _image_generate_attempts(model, prompt)
-    last_error: BaseException | None = None
-    for i, kwargs in enumerate(attempts):
-        try:
-            return client.images.generate(**kwargs)
-        except Exception as e:
-            last_error = e
-            if _retry_without_bad_params(e) and i < len(attempts) - 1:
-                continue
-            raise
-    assert last_error is not None
-    raise last_error
-
-
-def _bytes_from_image_response(result) -> bytes:
-    item = result.data[0]
-    if getattr(item, "b64_json", None):
-        return base64.b64decode(item.b64_json)
-    url = getattr(item, "url", None)
-    if not url:
-        raise RuntimeError("이미지 데이터를 받지 못했습니다.")
-    with httpx.Client(timeout=120.0) as http:
-        res = http.get(url)
-        res.raise_for_status()
-        data = res.content
-    if len(data) < 256:
-        raise RuntimeError("이미지 다운로드에 실패했습니다.")
+    with httpx.Client(timeout=180.0, follow_redirects=True) as http:
+        res = http.get(url, params=params)
+    if res.status_code != 200:
+        raise RuntimeError(f"이미지 서버 응답 {res.status_code}")
+    ctype = (res.headers.get("content-type") or "").lower()
+    if "image" not in ctype:
+        raise RuntimeError(f"이미지 응답이 아닙니다: {ctype}")
+    data = res.content
+    if len(data) < 1024:
+        raise RuntimeError("이미지 데이터가 너무 작습니다.")
     return data
 
 
@@ -384,32 +269,16 @@ def generate_listing_cover_png(
     description: str = "",
     prompt_en: str | None = None,
 ) -> tuple[bytes, str]:
-    """OPENAI_API_KEY 로 DALL·E 이미지 생성. (png bytes, 사용한 프롬프트)."""
-    if not is_openai_configured():
-        raise RuntimeError("OPENAI_API_KEY missing")
+    """대표 이미지 생성 — Pollinations Flux 단독 (키 불필요).
 
+    `LOCAL_LINK_IMAGE_PROVIDER` 환경변수와 무관하게 Pollinations 만 사용한다.
+    어떤 외부 LLM 키도 요구하지 않아 데모 환경에서 항상 동작한다.
+    """
     if (prompt_en or "").strip():
-        prompt = prompt_en.strip()[:3800]
+        prompt = prompt_en.strip()[:1500]
     else:
         prompt = _image_prompt_en(
             kind, title, location, category=category, description=description
-        )
-    models = image_models_to_try()
-    last_error: BaseException | None = None
-    from services.api_keys import openai_keys
-
-    for key_i in range(len(openai_keys()) or 1):
-        client = _openai_client(key_index=key_i)
-        for model in models:
-            try:
-                result = _generate_image(client, model, prompt)
-                return _bytes_from_image_response(result), prompt
-            except Exception as e:
-                last_error = e
-                if _model_unavailable(e) and model != models[-1]:
-                    continue
-                if _is_retryable_openai_error(e):
-                    break
-                break
-
-    raise RuntimeError(f"이미지 생성 실패: {last_error}")
+        )[:1500]
+    data = _pollinations_image(prompt)
+    return data, prompt

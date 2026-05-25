@@ -251,6 +251,20 @@ title(품목/체험명)
 - raw_text: 인식한 전체 텍스트
 - missing_required: 비어 있는 필수 필드 키 목록
 - warnings: 품질·분류 불확실 시 한국어 안내
+
+location(원산지·지역) 정규화 규칙 — 매우 중요:
+- 한국 행정구역 표기 «시·도 + 시·군·구 + 읍·면·동» 순으로 가능한 한 풍부하게 작성하세요.
+- "국산", "원산지" 같은 라벨은 빼고 실제 지명만 value 에 넣으세요.
+- 메모에 면·동·읍 이름만 적혀 있으면, 그 행정구역이 실제로 속한 시·군과 시·도를
+  반드시 같이 채우세요. 예시:
+  - "기계면"        → "경상북도 포항시 북구 기계면"
+  - "북구 기계면"   → "경상북도 포항시 북구 기계면"
+  - "가야면"        → "경상남도 합천군 가야면" (또는 "광주광역시 광산구 가야동" 등 상황에 맞게)
+  - "죽도"          → "강원특별자치도 양양군 현남면 죽도리"
+- "경상북도/경북" 과 "경상남도/경남" 은 절대 혼동하지 마세요. 손글씨가 모호하면
+  needs_review=true 로 표시하고, 면·동 이름이 어느 도에 속하는지로 추론하세요.
+  (예: 기계면은 경상북도 포항시이므로 "경상남도 포항시"로는 절대 쓰지 마세요.)
+- 시·군 정보가 본문에 없고 면·동도 모를 때만 짧게 두고 needs_review=true 로 두세요.
 """
 
     content.append({"type": "text", "text": prompt})
@@ -285,30 +299,46 @@ title(품목/체험명)
     fields = _normalize_fields(data)
     overall = float(data.get("confidence_overall") or 0.5)
     missing = list(data.get("missing_required") or [])
-    if "title" not in fields or not fields["title"].get("value"):
-        if "title" not in missing:
-            missing.append("title")
-    if "price" not in fields or fields["price"].get("value") in (None, "", 0):
-        if data.get("registration_type") == "product" and "price" not in missing:
-            missing.append("price")
-
-    out_warnings = list(data.get("warnings") or []) + warnings
-    if overall < 0.4:
-        out_warnings.append("인식이 어렵습니다. 직접 입력하거나 선명한 사진으로 다시 시도해 주세요.")
-    if data.get("registration_type") != "product":
-        out_warnings.append("예약·주문 메모로 보입니다. 상품 등록 폼에는 일부만 채워집니다.")
+    raw_text = str(data.get("raw_text") or "").strip()
 
     reg_type = data.get("registration_type") or "product"
     listing_tab = data.get("listing_tab") or hint_tab or "product"
     if listing_tab not in ("product", "lodging", "experience"):
         listing_tab = "product"
 
+    # A2A 검수 — A2(Claude) + A3(OpenAI, max 모드)로 행정구역·단위·일관성 점검
+    try:
+        from services.agent_pipeline import audit_ocr_listing, pipeline_mode
+
+        fields, a2a_steps = audit_ocr_listing(
+            fields, raw_text=raw_text, listing_tab=listing_tab
+        )
+        a2a_pipeline = "a2a" if a2a_steps else pipeline_mode()
+    except Exception:
+        a2a_steps = []
+        a2a_pipeline = "rules"
+
+    if "title" not in fields or not fields["title"].get("value"):
+        if "title" not in missing:
+            missing.append("title")
+    if "price" not in fields or fields["price"].get("value") in (None, "", 0):
+        if reg_type == "product" and "price" not in missing:
+            missing.append("price")
+
+    out_warnings = list(data.get("warnings") or []) + warnings
+    if overall < 0.4:
+        out_warnings.append("인식이 어렵습니다. 직접 입력하거나 선명한 사진으로 다시 시도해 주세요.")
+    if reg_type != "product":
+        out_warnings.append("예약·주문 메모로 보입니다. 상품 등록 폼에는 일부만 채워집니다.")
+
     return {
         "registration_type": reg_type,
         "listing_tab": listing_tab,
         "confidence_overall": overall,
-        "raw_text": str(data.get("raw_text") or "").strip(),
+        "raw_text": raw_text,
         "fields": fields,
         "missing_required": missing,
         "warnings": out_warnings,
+        "a2a_pipeline": a2a_pipeline,
+        "a2a_steps": a2a_steps,
     }
