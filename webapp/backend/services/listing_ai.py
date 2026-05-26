@@ -205,11 +205,8 @@ def enhance_image_prompt(
     description: str = "",
     user_hint: str = "",
 ) -> dict:
-    """짧은 한국어 입력 → 이미지 모델용 영문 프롬프트 (규칙 기반).
-
-    Pollinations Flux 는 한국어를 그대로 받아도 동작하지만, 일관성을 위해
-    규칙 기반 영문 프롬프트를 만들고 사용자 힌트만 끝에 덧붙인다. Claude 호출은
-    제거해 단순화하고 응답 속도를 올렸다.
+    """짧은 한국어 입력 → 이미지 모델용 영문 프롬프트.
+    Claude를 사용하여 한국어 상품명(예: 서리태)을 정확한 영문으로 번역하고 강화된 프롬프트를 생성합니다.
     """
     title = (title or "").strip()
     if not title:
@@ -217,15 +214,50 @@ def enhance_image_prompt(
 
     desc = (description or "").strip()
     hint = (user_hint or "").strip()
-    prompt_en = _fallback_enhance_prompt(
-        kind, title, location, category, desc, hint
-    )
+
     if _is_experience(title, desc, category):
         summary = "체험·활동 장면으로 잡았습니다."
     elif kind == "lodging":
         summary = "숙박·민박 장면으로 잡았습니다."
     else:
         summary = "특산품 상품 사진 스타일로 잡았습니다."
+
+    from services.api_keys import anthropic_messages_create, anthropic_response_text, is_anthropic_configured
+    from services.llm import DEFAULT_MODEL
+
+    if not is_anthropic_configured():
+        prompt_en = _fallback_enhance_prompt(kind, title, location, category, desc, hint)
+        return {"prompt_en": prompt_en, "summary_ko": summary}
+
+    base = _image_prompt_en(kind, title, location, category=category, description=desc)
+    
+    prompt = f"""I need an English prompt for an AI image generator (like Flux/Midjourney) based on a Korean local marketplace listing.
+Please translate the specific Korean product/subject into accurate English terms (e.g. "서리태" -> "black soybeans") and combine it with the base instructions.
+
+Korean Title: {title}
+Description: {desc}
+Additional Hint: {hint}
+Base Instruction: {base}
+
+Requirements:
+- Output ONLY the final English prompt string.
+- Make sure the main subject is correctly translated and clearly described.
+- Focus on high-quality, photorealistic product/scene photography.
+- Do NOT include markdown formatting or conversational text."""
+
+    try:
+        response = anthropic_messages_create(
+            model=DEFAULT_MODEL,
+            max_tokens=300,
+            system="You are an expert prompt engineer for AI image generation.",
+            messages=[{"role": "user", "content": prompt}],
+            thinking={"type": "disabled"},
+            output_config={"effort": "low"},
+        )
+        prompt_en = anthropic_response_text(response).strip()
+    except Exception:
+        prompt_en = _fallback_enhance_prompt(kind, title, location, category, desc, hint)
+
     return {"prompt_en": prompt_en, "summary_ko": summary}
 
 
