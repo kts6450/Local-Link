@@ -82,4 +82,5 @@ export type OcrListingDraft = {
   warnings: string[];
   a2a_pipeline?: "off" | "rules" | "a2a" | "max" | string;
   a2a_steps?: OcrA2aStep[];
+  variants?: import("../types").ListingVariant[] | null;
 };

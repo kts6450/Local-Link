@@ -73,6 +73,23 @@ def _field(value: str | int | None, confidence: float, *, needs_review: bool | N
     }
 
 
+# confidence_overall 재계산 시 핵심·상세 필드 가중치
+_CORE_FIELD_WEIGHTS: dict[str, float] = {
+    "title": 0.24,
+    "price": 0.22,
+    "location": 0.16,
+    "quantity": 0.08,
+    "description": 0.12,
+}
+_DETAIL_FIELD_WEIGHTS: dict[str, float] = {
+    "producer": 0.045,
+    "shelf_life": 0.045,
+    "storage_method": 0.045,
+    "origin": 0.045,
+    "unit": 0.045,
+}
+
+
 def _decode_image(data_url_or_b64: str) -> tuple[bytes, str]:
     """이미지 bytes → JPEG로 정규화 (Vision API media_type 불일치 방지)."""
     raw = (data_url_or_b64 or "").strip()
@@ -153,6 +170,216 @@ _DETAIL_LABELS: list[tuple[str, list[str]]] = [
 _ALL_LABELS_RE = "|".join(p for _, ps in _DETAIL_LABELS for p in ps)
 
 
+def _clean_detail_value(val: str) -> str:
+    """정규식 추출 값에서 OCR 잡음(화살표·끝 구두점)을 제거."""
+    cleaned = (val or "").strip()
+    cleaned = re.sub(r"^[→\-–—>\s]+", "", cleaned)
+    cleaned = re.sub(r"\s*[→\-–—>]+\s*(?:가을|봄|여름|겨울|환절기)\s*$", "", cleaned)
+    cleaned = re.sub(r"\s*[→\-–—>]+\s*[가-힣]{1,4}\s*$", "", cleaned)
+    cleaned = re.sub(r"[→\-–—>\s]+$", "", cleaned)
+    cleaned = re.sub(r"[\s.,;·/]+$", "", cleaned)
+    return cleaned[:120]
+
+
+_STORAGE_TYPO_FIXES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"냉공"), "냉장"),
+    (re.compile(r"냉쟁"), "냉장"),
+    (re.compile(r"냉장고"), "냉장"),
+]
+
+
+def _normalize_storage_method(val: str) -> str:
+    """보관방법 OCR 오타·화살표 잡음 정리."""
+    cleaned = _clean_detail_value(val)
+    for pattern, repl in _STORAGE_TYPO_FIXES:
+        cleaned = pattern.sub(repl, cleaned)
+    return cleaned.strip()[:120]
+
+
+def _postprocess_detail_fields(fields: dict[str, dict]) -> None:
+    """상세 필드 값 후처리 — 보관방법 오타 등."""
+    item = fields.get("storage_method")
+    if not isinstance(item, dict):
+        return
+    raw = str(item.get("value") or "").strip()
+    if not raw:
+        return
+    fixed = _normalize_storage_method(raw)
+    if fixed == raw:
+        return
+    conf = float(item.get("confidence") or 0.7)
+    fields["storage_method"] = _field(
+        fixed,
+        min(1.0, conf + 0.05),
+        needs_review=False,
+    )
+
+
+def _extract_price_variants(text: str) -> list[dict[str, Any]] | None:
+    """raw_text·설명·가격 문자열에서 용량·단가 옵션 추출."""
+    if not (text or "").strip():
+        return None
+
+    items: list[tuple[str, int]] = []
+    seen: set[str] = set()
+
+    def add(label: str, price: int) -> None:
+        label = re.sub(r"\s+", "", (label or "").strip())
+        if not label or len(label) > 40 or price <= 0 or price >= 100_000_000:
+            return
+        if label in seen:
+            return
+        seen.add(label)
+        items.append((label, price))
+
+    blob = text
+
+    for m in re.finditer(r"(\d[\d,]*)\s*원?\s*\(\s*([^)]+?)\s*\)", blob):
+        add(m.group(2), int(m.group(1).replace(",", "")))
+
+    for m in re.finditer(
+        r"(\d+\s*(?:g|kg|그램|킬로|키로|ml|cc|l|리터|L))\s*\(\s*(\d[\d,]*)\s*원?\s*\)",
+        blob,
+        re.I,
+    ):
+        add(m.group(1), int(m.group(2).replace(",", "")))
+
+    for m in re.finditer(
+        r"(\d+\s*(?:g|kg|그램|킬로|키로|ml|cc|l|리터|L))\s*[:：·]\s*(\d[\d,]*)\s*원?",
+        blob,
+        re.I,
+    ):
+        add(m.group(1), int(m.group(2).replace(",", "")))
+
+    for seg in re.split(r"[/|,;]+|\s+·\s+", blob):
+        seg = seg.strip()
+        if not seg:
+            continue
+        wm = re.search(r"(\d+\s*(?:g|kg|그램|킬로|키로|ml|cc|l|리터|L))", seg, re.I)
+        pm = re.search(r"(\d[\d,]*)\s*원", seg)
+        if wm and pm:
+            add(wm.group(1), int(pm.group(1).replace(",", "")))
+
+    if len(items) < 2:
+        return None
+    return [{"label": lbl, "price": pr} for lbl, pr in items]
+
+
+def _is_multi_price_warning(msg: str) -> bool:
+    s = msg or ""
+    return any(
+        k in s
+        for k in (
+            "여러 단가",
+            "옵션 설정",
+            "대표 가격",
+            "대표가",
+            "여러 가격",
+        )
+    )
+
+
+def _filter_resolved_warnings(
+    warnings: list[str],
+    *,
+    fields: dict[str, dict],
+    a2a_steps: list[dict[str, Any]],
+    variants: list[dict[str, Any]] | None,
+) -> list[str]:
+    """자동 보정된 항목에 대한 중복 경고를 제거."""
+    location_fixed = any("location" in (s.get("applied") or []) for s in a2a_steps)
+    storage_val = str((fields.get("storage_method") or {}).get("value") or "")
+    storage_typo_fixed = "냉장" in storage_val and "냉공" not in storage_val
+
+    out: list[str] = []
+    for w in warnings:
+        if variants and len(variants) >= 2 and _is_multi_price_warning(w):
+            continue
+        if location_fixed and ("경항" in w or ("추론" in w and "원산지" in w)):
+            continue
+        if storage_typo_fixed and "냉공" in w:
+            continue
+        out.append(w)
+    return out
+
+
+def _detail_value_confidence(key: str, val: str, source_text: str) -> float:
+    """정규식으로 뽑은 상세 필드 신뢰도 — 라벨·값이 원문과 맞으면 높게."""
+    val = _clean_detail_value(val)
+    if not val or len(val) < 2:
+        return 0.78
+    if re.search(r"^[→\-–—>]", val) or "→" in val[:4]:
+        return 0.78
+    blob = source_text or ""
+    for detail_key, label_patterns in _DETAIL_LABELS:
+        if detail_key != key:
+            continue
+        for pattern in label_patterns:
+            probe = re.escape(val[: min(len(val), 24)])
+            if re.search(rf"{pattern}\s*[:：]?\s*{probe}", blob, re.I | re.S):
+                return 0.97
+        break
+    return 0.92
+
+
+def _recompute_confidence_overall(
+    fields: dict[str, dict],
+    *,
+    initial: float,
+    a2a_steps: list[dict[str, Any]],
+    missing_required: list[str],
+) -> float:
+    """필드별 confidence + A2A 검수 결과를 반영해 최종 신뢰도를 재산정."""
+    weights: dict[str, float] = dict(_CORE_FIELD_WEIGHTS)
+    for key, weight in _DETAIL_FIELD_WEIGHTS.items():
+        item = fields.get(key)
+        if item and str(item.get("value") or "").strip():
+            weights[key] = weight
+
+    present: dict[str, float] = {}
+    for key, weight in weights.items():
+        item = fields.get(key)
+        if not isinstance(item, dict):
+            continue
+        val = item.get("value")
+        if val in (None, "", 0):
+            continue
+        present[key] = weight
+
+    if present:
+        total_w = sum(present.values())
+        field_score = 0.0
+        for key, weight in present.items():
+            item = fields[key]
+            conf = float(item.get("confidence") or 0.5)
+            if item.get("needs_review"):
+                conf *= 0.88
+            field_score += conf * (weight / total_w)
+    else:
+        field_score = initial
+
+    adjusted = field_score
+    for step in a2a_steps:
+        applied = step.get("applied") or []
+        issues = step.get("issues") or []
+        review_keys = step.get("needs_review_keys") or []
+        if step.get("approved") and not issues and not review_keys:
+            adjusted = min(1.0, adjusted + 0.04)
+        if applied:
+            adjusted = min(1.0, adjusted + 0.015 * len(applied))
+        if issues:
+            adjusted = max(0.35, adjusted - 0.025 * len(issues))
+        if review_keys:
+            adjusted = max(0.35, adjusted - 0.02 * len(review_keys))
+
+    if missing_required:
+        adjusted = max(0.35, adjusted - 0.06 * len(missing_required))
+
+    # VLM 초기값과 재산정값을 섞되, 필드 기반이 우세
+    blended = 0.2 * initial + 0.8 * adjusted
+    return round(max(0.0, min(1.0, blended)), 3)
+
+
 def _extract_details_from_text(text: str) -> dict[str, str]:
     """메모/설명 텍스트에서 5개 상세 키를 정규식으로 떼어낸다.
 
@@ -176,15 +403,13 @@ def _extract_details_from_text(text: str) -> dict[str, str]:
         m = regex.search(text)
         if not m:
             continue
-        val = (m.group(1) or "").strip()
-        # 끝의 잡 구두점 정리 (단, 괄호는 보존).
-        val = re.sub(r"[\s.,;·/]+$", "", val)
+        val = _clean_detail_value(m.group(1) or "")
         # 값이 다른 라벨 키워드 자체이면 무시.
         if not val or len(val) < 1:
             continue
         if re.fullmatch(rf"(?:{_ALL_LABELS_RE})", val):
             continue
-        out[key] = val[:120]
+        out[key] = val
     return out
 
 
@@ -201,7 +426,8 @@ def _augment_details_from_blob(fields: dict[str, dict]) -> None:
         existing = fields.get(key)
         if existing and str(existing.get("value") or "").strip():
             continue
-        fields[key] = _field(val, 0.65)
+        conf = _detail_value_confidence(key, val, blob)
+        fields[key] = _field(val, conf)
 
 
 def _normalize_fields(raw: dict) -> dict[str, dict]:
@@ -308,6 +534,13 @@ OCR로 읽고 JSON만 출력하세요.{tab_hint}
 2) listing_tab: product(농축수산·가공품) | lodging(숙박·민박) | experience(체험·투어)
 3) fields 각 항목: value, confidence(0~1), needs_review(confidence<0.7이면 true)
 
+confidence_overall 부여 기준 (보수적으로 깎지 말 것):
+- 메모 글자가 선명하고 필수 필드(title·price)가 원문과 누락 없이 맞으면 0.92~0.98
+- 일부 필드가 애매하거나 손글씨가 흐릿하면 0.75~0.88
+- 가격·제목 중 하나라도 추측이면 0.55~0.72
+- 대부분 읽기 어렵거나 빈칸이 많으면 0.35~0.54
+- 각 field confidence 도 같은 기준으로: 원문과 정확히 일치 0.9+, 약간 추론 0.75~0.85
+
 상품 필드: title(필수), price 원 단위 숫자(필수), quantity(kg/개 등), location(시·군·동네),
 description(특이사항·무농약 등), notes
 description 에는 메모에 적힌 다음 항목을 「라벨: 값」 형태로 줄바꿈으로 정확히 옮겨 적어 주세요
@@ -323,7 +556,7 @@ title(품목/체험명)
 규칙:
 - 방언·약어 이해 (햅쌀, 수미감자, 갯벌체험 등)
 - 가격은 숫자만 (원 제외)
-- confidence_overall 전체 신뢰도
+- confidence_overall: 위 기준표에 따라 0~1 숫자 하나 (소수 둘째 자리)
 - raw_text: 인식한 전체 텍스트
 - missing_required: 비어 있는 필수 필드 키 목록
 - warnings: 품질·분류 불확실 시 한국어 안내
@@ -402,7 +635,15 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
             existing = fields.get(key)
             if existing and str(existing.get("value") or "").strip():
                 continue
-            fields[key] = _field(val, 0.6)
+            conf = _detail_value_confidence(key, val, raw_text)
+            fields[key] = _field(val, conf)
+
+    _postprocess_detail_fields(fields)
+
+    price_raw = (data.get("fields") or {}).get("price", {})
+    price_blob = ""
+    if isinstance(price_raw, dict) and price_raw.get("value") is not None:
+        price_blob = str(price_raw.get("value"))
 
     reg_type = data.get("registration_type") or "product"
     listing_tab = data.get("listing_tab") or hint_tab or "product"
@@ -421,6 +662,31 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
         a2a_steps = []
         a2a_pipeline = "rules"
 
+    _postprocess_detail_fields(fields)
+
+    variant_text = "\n".join(
+        p
+        for p in (
+            raw_text,
+            price_blob,
+            str((fields.get("description") or {}).get("value") or ""),
+            str((fields.get("quantity") or {}).get("value") or ""),
+            " ".join(
+                f
+                for s in a2a_steps
+                if isinstance(s, dict)
+                for f in (s.get("fixes") or [])
+                if isinstance(f, str)
+            ),
+        )
+        if p
+    )
+    variants = _extract_price_variants(variant_text)
+    if variants:
+        min_price = min(v["price"] for v in variants)
+        prev_conf = float((fields.get("price") or {}).get("confidence") or 0.85)
+        fields["price"] = _field(min_price, max(prev_conf, 0.88), needs_review=False)
+
     if "title" not in fields or not fields["title"].get("value"):
         if "title" not in missing:
             missing.append("title")
@@ -428,7 +694,25 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
         if reg_type == "product" and "price" not in missing:
             missing.append("price")
 
+    overall = _recompute_confidence_overall(
+        fields,
+        initial=overall,
+        a2a_steps=a2a_steps,
+        missing_required=missing,
+    )
+
     out_warnings = list(data.get("warnings") or []) + warnings
+    out_warnings = _filter_resolved_warnings(
+        out_warnings,
+        fields=fields,
+        a2a_steps=a2a_steps,
+        variants=variants,
+    )
+    if variants and len(variants) >= 2:
+        out_warnings.insert(
+            0,
+            f"용량·가격 옵션 {len(variants)}개를 자동으로 찾았어요. 아래 옵션란에서 확인해 주세요.",
+        )
     if overall < 0.4:
         out_warnings.append("인식이 어렵습니다. 직접 입력하거나 선명한 사진으로 다시 시도해 주세요.")
     if reg_type != "product":
@@ -444,4 +728,5 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
         "warnings": out_warnings,
         "a2a_pipeline": a2a_pipeline,
         "a2a_steps": a2a_steps,
+        "variants": variants,
     }

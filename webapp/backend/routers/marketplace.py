@@ -17,6 +17,7 @@ from services.listing_ai import (
     enhance_image_prompt,
     generate_listing_cover_png,
     generate_listing_description,
+    image_generation_info,
 )
 from services.listing_package import generate_listing_package
 from services.note_ocr import parse_note_images
@@ -183,11 +184,13 @@ def feature_flags():
 @router.get("/ai/capabilities")
 def ai_capabilities():
     """프론트에서 AI 버튼 노출 여부."""
+    img = image_generation_info()
     return {
         "description_ai": True,
         "description_claude": anthropic_configured(),
-        "image_openai": True,
-        "image_models": ["pollinations-flux"],
+        "image_openai": img["provider"] == "openai" and img["configured"],
+        "image_provider": img["provider"],
+        "image_models": img["models"],
         "package_ai": True,
         "package_claude": anthropic_configured(),
     }

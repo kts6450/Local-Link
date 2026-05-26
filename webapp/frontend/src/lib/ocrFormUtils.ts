@@ -11,30 +11,73 @@ import type { ListingTab, OcrListingDraft } from "./listingTabs";
 export function parseOcrPriceVariants(
   raw: string | number | null | undefined
 ): ListingVariant[] | null {
-  if (raw == null || raw === "" || typeof raw === "number") return null;
-  const s = String(raw).trim();
-  if (!s) return null;
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "number") return null;
+  return parseOcrPriceVariantsFromText(String(raw).trim());
+}
 
-  // "숫자 + (라벨)" 패턴 추출. 라벨 안에 숫자·g·kg·인분·박·시간 등 허용.
-  const itemRe = /(\d[\d,]*)\s*\(\s*([^)]+?)\s*\)/g;
+/** raw_text·설명 등 긴 텍스트에서 용량·단가 옵션 추출 (백엔드와 동일 패턴). */
+export function parseOcrPriceVariantsFromText(text: string | null | undefined): ListingVariant[] | null {
+  const blob = (text ?? "").trim();
+  if (!blob) return null;
+
   const items: ListingVariant[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = itemRe.exec(s)) !== null) {
-    const price = parseInt(m[1].replace(/,/g, ""), 10);
-    const label = m[2].trim();
-    if (!Number.isFinite(price) || price <= 0 || price >= 100_000_000) continue;
-    if (!label || label.length > 60) continue;
-    items.push({ label, price });
-  }
-  if (items.length < 2) return null;
-  // 라벨 중복 제거
   const seen = new Set<string>();
-  const unique = items.filter((v) => {
-    if (seen.has(v.label)) return false;
-    seen.add(v.label);
-    return true;
-  });
-  return unique.length >= 2 ? unique : null;
+
+  const add = (label: string, price: number) => {
+    const normalized = label.replace(/\s+/g, "");
+    if (!normalized || normalized.length > 40) return;
+    if (!Number.isFinite(price) || price <= 0 || price >= 100_000_000) return;
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+    items.push({ label: normalized, price });
+  };
+
+  const priceLabelRe = /(\d[\d,]*)\s*원?\s*\(\s*([^)]+?)\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = priceLabelRe.exec(blob)) !== null) {
+    add(m[2], parseInt(m[1].replace(/,/g, ""), 10));
+  }
+
+  const labelPriceRe =
+    /(\d+\s*(?:g|kg|그램|킬로|키로|ml|cc|l|리터|L))\s*(?:\(\s*(\d[\d,]*)\s*원?\s*\)|[:：·]\s*(\d[\d,]*)\s*원?)/gi;
+  while ((m = labelPriceRe.exec(blob)) !== null) {
+    const priceStr = m[2] ?? m[3];
+    if (priceStr) add(m[1], parseInt(priceStr.replace(/,/g, ""), 10));
+  }
+
+  for (const seg of blob.split(/[/|,;]+|\s+·\s+/)) {
+    const trimmed = seg.trim();
+    if (!trimmed) continue;
+    const wm = trimmed.match(/(\d+\s*(?:g|kg|그램|킬로|키로|ml|cc|l|리터|L))/i);
+    const pm = trimmed.match(/(\d[\d,]*)\s*원/);
+    if (wm && pm) add(wm[1], parseInt(pm[1].replace(/,/g, ""), 10));
+  }
+
+  return items.length >= 2 ? items : null;
+}
+
+/** OCR 초안에서 옵션 후보 추출 — API variants 우선, 없으면 raw_text 파싱. */
+export function extractOcrVariants(draft: OcrListingDraft): ListingVariant[] | null {
+  if (draft.variants && draft.variants.length >= 2) return draft.variants;
+  const fromPrice = parseOcrPriceVariants(draft.fields?.price?.value);
+  if (fromPrice && fromPrice.length >= 2) return fromPrice;
+  const qty = String(draft.fields?.quantity?.value ?? "");
+  const desc = String(draft.fields?.description?.value ?? "");
+  const blob = [draft.raw_text, qty, desc].filter(Boolean).join("\n");
+  return parseOcrPriceVariantsFromText(blob);
+}
+
+/** 보관방법 OCR 오타·화살표 잡음 정리 */
+export function cleanOcrStorageMethod(raw: string | null | undefined): string {
+  let s = (raw ?? "").trim();
+  if (!s) return "";
+  s = s.replace(/^[→\-–—>\s]+/, "");
+  s = s.replace(/\s*[→\-–—>]+\s*(?:가을|봄|여름|겨울|환절기)\s*$/u, "");
+  s = s.replace(/\s*[→\-–—>]+\s*[가-힣]{1,4}\s*$/u, "");
+  s = s.replace(/냉공/g, "냉장");
+  s = s.replace(/냉쟁/g, "냉장");
+  return s.replace(/\s{2,}/g, " ").trim();
 }
 
 /** OCR 가격 문자열 → 대표 1개 가격 + (선택) 다중 단가 안내 */

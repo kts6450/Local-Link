@@ -22,7 +22,8 @@ import {
   buildOcrImagePrompt,
   cleanOcrLocation,
   parseOcrPrice,
-  parseOcrPriceVariants,
+  extractOcrVariants,
+  cleanOcrStorageMethod,
 } from "../../lib/ocrFormUtils";
 import {
   LISTING_CATEGORIES,
@@ -171,23 +172,22 @@ export function SellerProductsPage() {
     if (ocrTitle) setTitle(ocrTitle);
     const { price: parsedPrice, detailNote } = parseOcrPrice(f.price?.value);
     if (parsedPrice) setPrice(parsedPrice);
-    setOcrPriceDetail(detailNote);
-    // 다중 단가 패턴이면 옵션 후보로 자동 추출 (셀러가 한 번 확인만 하면 됨).
-    const ocrVariants = parseOcrPriceVariants(f.price?.value);
+    const ocrVariants = extractOcrVariants(draft);
     if (ocrVariants && ocrVariants.length >= 2) {
       setVariants(ocrVariants);
-      // 대표가는 가장 작은 옵션가로 정렬해 두면 카드 노출 시 자연스러움.
+      setOcrPriceDetail(null);
       const minPrice = Math.min(...ocrVariants.map((v) => v.price));
       if (Number.isFinite(minPrice) && minPrice > 0) setPrice(String(minPrice));
     } else {
       setVariants(null);
+      setOcrPriceDetail(detailNote);
     }
     const ocrLocation =
       f.location?.value != null ? cleanOcrLocation(String(f.location.value)) : "";
     if (ocrLocation) setLocation(ocrLocation);
     const desc = f.description?.value ?? f.notes?.value;
     let descText = desc != null ? String(desc).trim() : "";
-    if (detailNote) {
+    if (detailNote && !ocrVariants) {
       const tierLine = `[판매 단가] ${detailNote}`;
       descText = descText ? `${descText}\n\n${tierLine}` : tierLine;
     }
@@ -204,7 +204,9 @@ export function SellerProductsPage() {
     for (const k of detailKeys) {
       const v = f[k]?.value;
       if (v != null && String(v).trim()) {
-        detailFromOcr[k] = String(v).trim();
+        let text = String(v).trim();
+        if (k === "storage_method") text = cleanOcrStorageMethod(text);
+        detailFromOcr[k] = text;
       }
     }
     // quantity 필드 — 「100g/200g/...」 같은 중량 표기는 stock 으로 넣으면 안 되고,

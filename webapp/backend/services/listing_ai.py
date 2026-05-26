@@ -1,7 +1,8 @@
-"""판매 글 — AI 상품 설명 (Claude) · 대표 이미지 (Pollinations Flux)."""
+"""판매 글 — AI 상품 설명 (Claude) · 대표 이미지 (OpenAI DALL·E / Pollinations)."""
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import secrets
@@ -261,6 +262,68 @@ Requirements:
     return {"prompt_en": prompt_en, "summary_ko": summary}
 
 
+def _image_provider() -> str:
+    """openai | pollinations — OPENAI 키 있으면 기본 openai."""
+    raw = (os.environ.get("LOCAL_LINK_IMAGE_PROVIDER") or "").strip().lower()
+    if raw in ("openai", "dalle", "dall-e"):
+        return "openai"
+    if raw in ("pollinations", "flux"):
+        return "pollinations"
+    from services.api_keys import is_openai_configured
+
+    return "openai" if is_openai_configured() else "pollinations"
+
+
+def _openai_image_models() -> list[str]:
+    explicit = (os.environ.get("OPENAI_IMAGE_MODEL") or "").strip()
+    if explicit:
+        return [explicit]
+    return ["dall-e-3", "dall-e-2"]
+
+
+def _openai_image(prompt: str) -> bytes:
+    """OpenAI Images API — dall-e-3 / dall-e-2."""
+    from services.api_keys import is_openai_configured, openai_client, openai_keys
+
+    if not is_openai_configured():
+        raise RuntimeError("OPENAI_API_KEY 가 없습니다.")
+
+    prompt = prompt.strip()[:4000]
+    if not prompt:
+        raise RuntimeError("이미지 프롬프트가 비어 있습니다.")
+
+    last_error: Exception | None = None
+    for model in _openai_image_models():
+        for i in range(len(openai_keys())):
+            try:
+                client = openai_client(key_index=i)
+                kwargs: dict = {
+                    "model": model,
+                    "prompt": prompt,
+                    "n": 1,
+                    "size": "1024x1024",
+                    "response_format": "b64_json",
+                }
+                if model.startswith("dall-e-3"):
+                    kwargs["quality"] = (
+                        os.environ.get("OPENAI_IMAGE_QUALITY") or "standard"
+                    ).strip()
+                resp = client.images.generate(**kwargs)
+                b64 = resp.data[0].b64_json
+                if not b64:
+                    raise RuntimeError("OpenAI 이미지 응답이 비어 있습니다.")
+                data = base64.b64decode(b64)
+                if len(data) < 1024:
+                    raise RuntimeError("이미지 데이터가 너무 작습니다.")
+                return data
+            except Exception as exc:
+                last_error = exc
+                continue
+
+    msg = f"OpenAI 이미지 생성 실패: {last_error}"
+    raise RuntimeError(msg) from last_error
+
+
 def _pollinations_image(prompt: str, *, seed: int | None = None) -> bytes:
     """Pollinations.ai Flux — 키 불필요, 1024x1024 PNG/JPEG bytes 반환.
 
@@ -301,16 +364,36 @@ def generate_listing_cover_png(
     description: str = "",
     prompt_en: str | None = None,
 ) -> tuple[bytes, str]:
-    """대표 이미지 생성 — Pollinations Flux 단독 (키 불필요).
-
-    `LOCAL_LINK_IMAGE_PROVIDER` 환경변수와 무관하게 Pollinations 만 사용한다.
-    어떤 외부 LLM 키도 요구하지 않아 데모 환경에서 항상 동작한다.
-    """
+    """대표 이미지 생성 — OpenAI DALL·E(기본) 또는 Pollinations."""
     if (prompt_en or "").strip():
         prompt = prompt_en.strip()[:1500]
     else:
         prompt = _image_prompt_en(
             kind, title, location, category=category, description=description
         )[:1500]
-    data = _pollinations_image(prompt)
+
+    provider = _image_provider()
+    if provider == "openai":
+        data = _openai_image(prompt)
+    else:
+        data = _pollinations_image(prompt)
     return data, prompt
+
+
+def image_generation_info() -> dict:
+    """프론트 /capabilities용."""
+    from services.api_keys import is_openai_configured
+
+    provider = _image_provider()
+    if provider == "openai":
+        models = _openai_image_models()
+        return {
+            "provider": "openai",
+            "models": models,
+            "configured": is_openai_configured(),
+        }
+    return {
+        "provider": "pollinations",
+        "models": [(os.environ.get("POLLINATIONS_MODEL") or "flux").strip()],
+        "configured": True,
+    }
