@@ -94,6 +94,20 @@ export function ListingInfoSections({ listing }: { listing: Listing }) {
   const steps = isMarketProduct ? [] : (g?.steps ?? []);
   const highlightsTitle = isExperience ? "체험 포인트" : "상품 특징";
 
+  // 상세 정보 — 마켓 상품 한정. 빈 값은 그리지 않는다.
+  const detailRows: { label: string; value?: string | null; icon: string }[] = [];
+  const d = listing.details;
+  if (isMarketProduct && d) {
+    if (d.unit?.trim()) detailRows.push({ label: "단위", value: d.unit, icon: "📦" });
+    if (d.origin?.trim()) detailRows.push({ label: "원산지", value: d.origin, icon: "🌾" });
+    if (d.producer?.trim())
+      detailRows.push({ label: "생산자", value: d.producer, icon: "👨‍🌾" });
+    if (d.shelf_life?.trim())
+      detailRows.push({ label: "유통기한", value: d.shelf_life, icon: "⏳" });
+    if (d.storage_method?.trim())
+      detailRows.push({ label: "보관 방법", value: d.storage_method, icon: "🧊" });
+  }
+
   return (
     <div className="space-y-8">
       <div className="rounded-2xl border border-hades-line bg-slate-50/80 p-5 sm:p-6">
@@ -101,6 +115,26 @@ export function ListingInfoSections({ listing }: { listing: Listing }) {
           {listing.description || "상세 설명이 곧 추가됩니다."}
         </p>
       </div>
+
+      {detailRows.length > 0 && (
+        <section>
+          <h3 className="font-bold text-hades-text text-xl mb-4">상품 정보</h3>
+          <dl className="rounded-2xl border border-hades-line bg-white divide-y divide-slate-100 overflow-hidden">
+            {detailRows.map((r) => (
+              <div
+                key={r.label}
+                className="grid grid-cols-[110px_1fr] gap-3 sm:gap-4 px-4 sm:px-5 py-3.5"
+              >
+                <dt className="text-sm font-semibold text-slate-500 flex items-center gap-1.5">
+                  <span aria-hidden>{r.icon}</span>
+                  <span>{r.label}</span>
+                </dt>
+                <dd className="text-slate-800 leading-snug">{r.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
 
       {g?.highlights && g.highlights.length > 0 && (
         <section>

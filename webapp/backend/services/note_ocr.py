@@ -51,6 +51,9 @@ _LISTING_SCHEMA = {
                 "date_time": _FIELD_SCHEMA,
                 "contact_phone": _FIELD_SCHEMA,
             },
+            # 상품 상세 정보(unit/origin/producer/shelf_life/storage_method)는
+            # Anthropic optional 파라미터 한도(24) 초과 방지를 위해 schema 에 두지
+            # 않고, description/notes/raw_text 에서 백엔드 정규식으로 추출한다.
             "additionalProperties": False,
         },
         "missing_required": {"type": "array", "items": {"type": "string"}},
@@ -133,6 +136,72 @@ def _parse_first_price(val: Any) -> int | str | None:
         return s
     n = int(m.group(1).replace(",", ""))
     return n if 0 < n < 100_000_000 else s
+
+
+# 메모에 자주 등장하는 한국어 라벨 → 상세 키.
+# 값은 「줄바꿈」 또는 「다음 알려진 라벨 직전」까지 잡고, 괄호 안의 쉼표는 허용.
+# 단어 자체가 값 안에 자주 들어가는 「농원」, 단독 「보관」은 라벨 후보에서 뺀다
+# (예: "기계 햇살 농원", "서늘한 곳 보관" 같은 값이 잘리는 것을 방지).
+_DETAIL_LABELS: list[tuple[str, list[str]]] = [
+    ("producer", [r"생\s*산\s*자", r"농\s*가\s*명?"]),
+    ("shelf_life", [r"유\s*통\s*기\s*한", r"소\s*비\s*기\s*한", r"보\s*존\s*기\s*간"]),
+    ("storage_method", [r"보\s*관\s*방\s*법", r"보\s*관\s*법"]),
+    ("origin", [r"원\s*산\s*지", r"생\s*산\s*지"]),
+    ("unit", [r"1\s*개\s*단위", r"판매\s*단위"]),
+]
+# 모든 라벨 후보 (다음 라벨 만나면 값 끝).
+_ALL_LABELS_RE = "|".join(p for _, ps in _DETAIL_LABELS for p in ps)
+
+
+def _extract_details_from_text(text: str) -> dict[str, str]:
+    """메모/설명 텍스트에서 5개 상세 키를 정규식으로 떼어낸다.
+
+    값 추출 규칙:
+    - 라벨 다음 ':' 또는 '：' 가 있으면 그 뒤부터, 없으면 공백 뒤부터.
+    - 줄바꿈 또는 「다음 알려진 라벨」 만날 때까지 캡처.
+    - 괄호 안의 쉼표는 값의 일부로 보존.
+    """
+    out: dict[str, str] = {}
+    if not text:
+        return out
+    for key, label_patterns in _DETAIL_LABELS:
+        label_alt = "|".join(label_patterns)
+        # `(?:^|\\b|[\\s.,;])` 라벨 앞 경계, `[:：]?` 콜론 선택, 다음 라벨 직전까지.
+        regex = re.compile(
+            rf"(?:^|[\s.,;·/])(?:{label_alt})\s*[:：]?\s*"
+            rf"(.+?)"
+            rf"(?=(?:\n|\s+(?:{_ALL_LABELS_RE})\s*[:：]?)|$)",
+            re.S,
+        )
+        m = regex.search(text)
+        if not m:
+            continue
+        val = (m.group(1) or "").strip()
+        # 끝의 잡 구두점 정리 (단, 괄호는 보존).
+        val = re.sub(r"[\s.,;·/]+$", "", val)
+        # 값이 다른 라벨 키워드 자체이면 무시.
+        if not val or len(val) < 1:
+            continue
+        if re.fullmatch(rf"(?:{_ALL_LABELS_RE})", val):
+            continue
+        out[key] = val[:120]
+    return out
+
+
+def _augment_details_from_blob(fields: dict[str, dict]) -> None:
+    """description/notes에 묻혀 들어온 상세 정보를 별도 키로 승격."""
+    description = str((fields.get("description") or {}).get("value") or "")
+    notes = str((fields.get("notes") or {}).get("value") or "")
+    blob = "\n".join(p for p in (description, notes) if p)
+    if not blob:
+        return
+    extracted = _extract_details_from_text(blob)
+    for key, val in extracted.items():
+        # 이미 LLM 이 그 키를 채워줬으면 건드리지 않는다.
+        existing = fields.get(key)
+        if existing and str(existing.get("value") or "").strip():
+            continue
+        fields[key] = _field(val, 0.65)
 
 
 def _normalize_fields(raw: dict) -> dict[str, dict]:
@@ -239,8 +308,15 @@ OCR로 읽고 JSON만 출력하세요.{tab_hint}
 2) listing_tab: product(농축수산·가공품) | lodging(숙박·민박) | experience(체험·투어)
 3) fields 각 항목: value, confidence(0~1), needs_review(confidence<0.7이면 true)
 
-상품 필드: title(필수), price 원 단위 숫자(필수), quantity(kg/개 등), location(원산지·지역),
+상품 필드: title(필수), price 원 단위 숫자(필수), quantity(kg/개 등), location(시·군·동네),
 description(특이사항·무농약 등), notes
+description 에는 메모에 적힌 다음 항목을 「라벨: 값」 형태로 줄바꿈으로 정확히 옮겨 적어 주세요
+(별도 키는 만들지 말고 description 한 칸에 모아 적습니다):
+- 생산자: ... (혹은 농가명: ...)
+- 유통기한: ...
+- 보관방법: ...
+- 원산지: ... (location 보다 더 구체적인 표기 — 농가·읍·리까지 들어가면 좋아요)
+이 4개 라벨은 메모에 적혀 있을 때만 줄을 추가하고, 없으면 생략하세요. 라벨 표기·값은 메모 그대로 옮겨 적되, 줄바꿈은 \n 으로 구분해 주세요.
 예약/주문 필드: customer_name, date_time, quantity(인원), contact_phone(마스킹 010-****-1234),
 title(품목/체험명)
 
@@ -287,8 +363,24 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
             },
         )
         text = anthropic_response_text(response)
-        data = json.loads(text)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            print("[note_ocr] JSON parse failed; raw text head:", repr(text[:500]))
+            raise exc
+        # 디버깅: Claude 가 무엇을 돌려줬는지 한 번 보고 갑니다.
+        print(
+            "[note_ocr] Claude OK — confidence={:.2f}, fields={}, raw_text_len={}".format(
+                float(data.get("confidence_overall") or 0.0),
+                sorted((data.get("fields") or {}).keys()),
+                len(str(data.get("raw_text") or "")),
+            )
+        )
     except Exception as exc:
+        import traceback
+
+        print("[note_ocr] OCR call failed:", type(exc).__name__, exc)
+        traceback.print_exc()
         out = _fallback_from_text("")
         out["warnings"].append(
             "AI OCR에 실패했습니다. 사진을 선명하게 다시 올리거나 직접 입력해 주세요."
@@ -300,6 +392,17 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
     overall = float(data.get("confidence_overall") or 0.5)
     missing = list(data.get("missing_required") or [])
     raw_text = str(data.get("raw_text") or "").strip()
+
+    # LLM 이 description/notes 한 덩어리로 던져준 경우, 한국어 라벨 패턴을 정규식으로
+    # 떼어 별도 상세 키(unit/origin/producer/shelf_life/storage_method)로 승격.
+    _augment_details_from_blob(fields)
+    # raw_text 에도 있을 수 있으므로 보조 시도.
+    if raw_text:
+        for key, val in _extract_details_from_text(raw_text).items():
+            existing = fields.get(key)
+            if existing and str(existing.get("value") or "").strip():
+                continue
+            fields[key] = _field(val, 0.6)
 
     reg_type = data.get("registration_type") or "product"
     listing_tab = data.get("listing_tab") or hint_tab or "product"

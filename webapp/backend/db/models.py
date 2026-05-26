@@ -26,6 +26,10 @@ class ListingRow(Base):
     cover_image_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     # 루플형 상품정보·이용안내 (highlights, steps, nearby, refund 등)
     guide_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 가격·용량 옵션 (예: [{"label":"100g","price":13000}, ...]). 없으면 단일가.
+    variants_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 상세 정보 (단위·원산지·생산자·유통기한·보관방법 등 자유 키-값). JSON 객체.
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class UserRow(Base):

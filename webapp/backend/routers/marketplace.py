@@ -376,6 +376,14 @@ class ListingCreate(BaseModel):
         description="선택. PNG 등 바이너리의 base64 또는 data URL",
     )
     guide: dict | None = Field(default=None, description="이용안내·체험 STEP 등 JSON")
+    variants: list[dict] | None = Field(
+        default=None,
+        description="가격·용량 옵션 [{label, price, stock?}] (없으면 단일가)",
+    )
+    details: dict | None = Field(
+        default=None,
+        description="상세 정보 — unit, origin, producer, shelf_life, storage_method 등",
+    )
 
     @field_validator("kind")
     @classmethod

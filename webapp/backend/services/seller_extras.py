@@ -149,7 +149,7 @@ def weather_season_tips(location: str) -> dict:
         else "겨울"
     )
     key = _region_key(loc)
-    regional = (_REGION_HINTS.get(key or {}) or {}).get("season", "")
+    regional = (_REGION_HINTS.get(key) or {}).get("season", "") if key else ""
 
     season_lines = {
         "봄": "봄철에는 새싹·봄나물·입춘 행사와 연계한 프로모션이 효과적입니다.",

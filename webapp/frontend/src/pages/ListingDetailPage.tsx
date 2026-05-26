@@ -125,6 +125,7 @@ export function ListingDetailPage() {
   const add = useCart((s) => s.add);
   const [tab, setTab] = useState<TabId>("info");
   const [qty, setQty] = useState(1);
+  const [variantIdx, setVariantIdx] = useState(0);
   const [guests, setGuests] = useState(2);
   const [monthCursor, setMonthCursor] = useState(() => startOfMonth(new Date()));
   const [checkIn, setCheckIn] = useState<Date | null>(null);
@@ -201,6 +202,15 @@ export function ListingDetailPage() {
 
   const isLodging = listing.kind === "lodging";
   const isExperience = listing.kind !== "lodging" && listing.category === "experience";
+  // 옵션 칩 — product 에만, 2개 이상일 때만 노출.
+  const variantList =
+    listing.kind === "product" && (listing.variants?.length ?? 0) >= 2
+      ? listing.variants!
+      : null;
+  const safeVariantIdx =
+    variantList && variantIdx < variantList.length ? variantIdx : 0;
+  const selectedVariant = variantList ? variantList[safeVariantIdx] : null;
+  const effectivePrice = selectedVariant?.price ?? listing.price;
   const photo = photoList[photoIndex] ?? listingCoverPhoto(listing);
   const views = listingDemoViewCount(listing.id);
   const areaLabel = isLodging ? "숙박·민박" : isExperience ? "체험·클래스" : "특산·상품";
@@ -386,8 +396,14 @@ export function ListingDetailPage() {
                   {listing.title}
                 </h1>
                 <p className="text-3xl sm:text-4xl font-bold text-shop-tealDark tabular-nums">
-                  {listing.price.toLocaleString()}
+                  {effectivePrice.toLocaleString()}
                   <span className="text-2xl font-bold">원</span>
+                  {selectedVariant ? (
+                    <span className="text-lg sm:text-xl font-semibold text-slate-500">
+                      {" "}
+                      / {selectedVariant.label}
+                    </span>
+                  ) : null}
                   {isLodging && (
                     <span className="text-lg sm:text-xl font-semibold text-slate-500">
                       {" "}
@@ -604,6 +620,36 @@ export function ListingDetailPage() {
             </>
           ) : (
             <>
+              {variantList ? (
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 mb-2">
+                    용량을 골라 주세요
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {variantList.map((v, i) => {
+                      const active = i === safeVariantIdx;
+                      return (
+                        <button
+                          key={`${v.label}-${i}`}
+                          type="button"
+                          onClick={() => setVariantIdx(i)}
+                          className={[
+                            "px-4 py-2.5 rounded-xl border-2 text-sm font-semibold transition-colors",
+                            active
+                              ? "border-shop-teal bg-shop-teal/10 text-shop-tealDark shadow-sm"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+                          ].join(" ")}
+                        >
+                          <span>{v.label}</span>
+                          <span className="ml-2 tabular-nums text-xs text-slate-500">
+                            {v.price.toLocaleString()}원
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
               <div>
                 <p className="text-sm font-semibold text-slate-700 mb-2">수량</p>
                 <div className="flex items-center gap-3">
@@ -626,11 +672,26 @@ export function ListingDetailPage() {
                 {listing.stock != null && (
                   <p className="text-xs text-slate-500 mt-2">현재 수량 {listing.stock}</p>
                 )}
+                {variantList ? (
+                  <p className="text-xs text-slate-500 mt-1.5">
+                    합계{" "}
+                    <strong className="text-shop-tealDark">
+                      {(effectivePrice * qty).toLocaleString()}원
+                    </strong>
+                  </p>
+                ) : null}
               </div>
               <button
                 type="button"
                 className="btn-shop w-full text-lg py-4 rounded-xl"
-                onClick={() => add(listing.id, qty)}
+                onClick={() =>
+                  add(listing.id, qty, selectedVariant
+                    ? {
+                        variant_label: selectedVariant.label,
+                        variant_price: selectedVariant.price,
+                      }
+                    : undefined)
+                }
               >
                 장바구니에 담기
               </button>

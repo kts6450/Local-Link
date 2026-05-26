@@ -6,8 +6,10 @@ import type {
   Brand,
   FeatureFlagItem,
   Listing,
+  ListingDetails,
   ListingGuide,
   ListingPhoto,
+  ListingVariant,
   Order,
   Turn,
   VoiceMode,
@@ -391,6 +393,8 @@ export const api = {
     max_guests?: number | null;
     cover_image_base64?: string | null;
     guide?: ListingGuide | null;
+    variants?: ListingVariant[] | null;
+    details?: ListingDetails | null;
   }): Promise<Listing> => {
     const res = await fetch("/api/marketplace/listings", {
       method: "POST",
@@ -437,6 +441,8 @@ export const api = {
       max_guests?: number | null;
       cover_image_base64?: string | null;
       guide?: ListingGuide | null;
+      variants?: ListingVariant[] | null;
+      details?: ListingDetails | null;
     }
   ): Promise<Listing> => {
     const res = await fetch(`/api/marketplace/listings/${id}`, {
@@ -547,6 +553,31 @@ export const api = {
         throw new Error("음성 처리 시간이 길어졌어요. 잠시 후 다시 말씀해 주세요.");
       }
       throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+
+  /** LLM 호출 없이 ASR 만 — 단일 폼 필드를 음성으로 채울 때. */
+  transcribeAudio: async (
+    audioBlob: Blob,
+    timeoutMs = 12_000
+  ): Promise<{ text: string; raw: string }> => {
+    const fd = new FormData();
+    fd.append("audio", audioBlob, "audio.wav");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch("/api/voice/asr", {
+        method: "POST",
+        body: fd,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`transcribeAudio ${res.status}: ${detail}`);
+      }
+      return res.json();
     } finally {
       clearTimeout(timer);
     }

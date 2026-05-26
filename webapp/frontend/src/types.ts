@@ -89,6 +89,26 @@ export interface ListingPhoto {
   created_at?: string;
 }
 
+export interface ListingVariant {
+  label: string;
+  price: number;
+  stock?: number;
+}
+
+/** 상품 상세 정보 — 모든 필드 옵션. 빈 값은 저장하지 않음. */
+export interface ListingDetails {
+  unit?: string;
+  origin?: string;
+  producer?: string;
+  shelf_life?: string;
+  storage_method?: string;
+  certification?: string;
+  shipping_when?: string;
+  min_order?: string;
+  ingredients?: string;
+  allergens?: string;
+}
+
 export interface Listing {
   id: string;
   seller_id: string;
@@ -104,6 +124,8 @@ export interface Listing {
   created_at: string;
   cover_image_url?: string | null;
   guide?: ListingGuide | null;
+  variants?: ListingVariant[] | null;
+  details?: ListingDetails | null;
   photos?: ListingPhoto[];
   rating?: number;
   review_count?: number;
@@ -159,6 +181,10 @@ export interface CartLine {
   quantity: number;
   stay_start?: string | null;
   stay_end?: string | null;
+  /** 옵션 라벨 (예: "200g"). 없으면 단일가 상품. */
+  variant_label?: string | null;
+  /** 옵션 가격(원) — 라벨과 함께 저장해 두면 추후 옵션이 바뀌어도 결제 금액은 보존. */
+  variant_price?: number | null;
 }
 
 export interface OrderItem {

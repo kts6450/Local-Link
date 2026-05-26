@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,97 @@ from db.database import SessionLocal
 from db.models import ListingRow, ReviewRow
 from services.listing_events import bump_listings_version
 from services.listing_guide import guide_to_json, parse_guide_json
+
+
+def _normalize_variants(raw) -> list[dict] | None:
+    """입력 variants 를 [{label, price, stock?}] 리스트로 정규화."""
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(raw, list):
+        return None
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        try:
+            price = int(item.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if not label or price < 0:
+            continue
+        v: dict = {"label": label[:60], "price": price}
+        stock = item.get("stock")
+        if isinstance(stock, (int, float)) and stock >= 0:
+            v["stock"] = int(stock)
+        out.append(v)
+    return out or None
+
+
+def _parse_variants_json(raw: str | None) -> list[dict] | None:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return _normalize_variants(data)
+
+
+# 상세 정보로 받아주는 키 화이트리스트 — 자유롭지만 무한 확장 방지.
+_DETAILS_KEYS = (
+    "unit",            # 1개 단위 (예: "kg", "개", "박스")
+    "origin",          # 원산지/생산지 (예: "경상북도 포항시 기계면")
+    "producer",        # 생산자/농가명
+    "shelf_life",      # 유통기한 ("1년", "냉장 7일")
+    "storage_method",  # 보관방법
+    # 향후 확장 여지 (인증·발송·알러지 등)
+    "certification",
+    "shipping_when",
+    "min_order",
+    "ingredients",
+    "allergens",
+)
+
+
+def _normalize_details(raw) -> dict | None:
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    out: dict = {}
+    for key in _DETAILS_KEYS:
+        val = raw.get(key)
+        if val is None:
+            continue
+        if isinstance(val, (int, float)):
+            out[key] = val
+            continue
+        s = str(val).strip()
+        if not s:
+            continue
+        out[key] = s[:300]
+    return out or None
+
+
+def _parse_details_json(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return _normalize_details(data)
 
 _RUNTIME = Path(__file__).resolve().parent.parent / "data" / "runtime"
 _COVERS_DIR = _RUNTIME / "listing_covers"
@@ -59,6 +151,8 @@ def _row_to_dict(row: ListingRow, *, rating: float = 0.0, review_count: int = 0)
         "created_at": row.created_at,
         "cover_image_url": row.cover_image_url,
         "guide": parse_guide_json(getattr(row, "guide_json", None)),
+        "variants": _parse_variants_json(getattr(row, "variants_json", None)),
+        "details": _parse_details_json(getattr(row, "details_json", None)),
         "photos": list_photos(row.id),
         "rating": round(rating, 1) if rating else 0.0,
         "review_count": int(review_count or 0),
@@ -152,6 +246,10 @@ def create_listing(record: dict) -> dict:
     cover_b64 = record.pop("cover_image_base64", None)
     guide_raw = record.pop("guide", None)
     guide_json = guide_to_json(guide_raw if isinstance(guide_raw, dict) else None)
+    variants_norm = _normalize_variants(record.pop("variants", None))
+    variants_json = json.dumps(variants_norm, ensure_ascii=False) if variants_norm else None
+    details_norm = _normalize_details(record.pop("details", None))
+    details_json = json.dumps(details_norm, ensure_ascii=False) if details_norm else None
 
     now = datetime.utcnow().isoformat()
     lid = record.get("id") or f"L-{uuid.uuid4().hex[:10]}"
@@ -159,6 +257,10 @@ def create_listing(record: dict) -> dict:
     category = (record.get("category") or "").strip()
     if category not in ("experience", "rural", "fishing", "craft", "leisure", "lodging"):
         category = "lodging" if kind == "lodging" else "rural"
+    # variants 가 있으면 대표 가격(price) 을 가장 작은 옵션 가격으로 강제 정렬.
+    base_price = int(record.get("price") or 0)
+    if variants_norm:
+        base_price = min(v["price"] for v in variants_norm)
     item = {
         "id": lid,
         "seller_id": record.get("seller_id") or "seller-local",
@@ -166,7 +268,7 @@ def create_listing(record: dict) -> dict:
         "category": category,
         "title": (record.get("title") or "").strip() or "이름 없음",
         "description": (record.get("description") or "").strip(),
-        "price": int(record.get("price") or 0),
+        "price": base_price,
         "emoji": record.get("emoji") or ("🏷️" if kind == "product" else "🏠"),
         "location": (record.get("location") or "").strip(),
         "stock": record.get("stock"),
@@ -174,6 +276,8 @@ def create_listing(record: dict) -> dict:
         "created_at": now,
         "cover_image_url": None,
         "guide_json": guide_json,
+        "variants_json": variants_json,
+        "details_json": details_json,
     }
     if item["kind"] not in ("product", "lodging"):
         item["kind"] = "product"
@@ -211,6 +315,10 @@ def update_listing(listing_id: str, record: dict) -> dict | None:
     cover_b64 = record.pop("cover_image_base64", None)
     has_guide = "guide" in record
     guide_raw = record.pop("guide", None)
+    has_variants = "variants" in record
+    variants_norm = _normalize_variants(record.pop("variants", None))
+    has_details = "details" in record
+    details_norm = _normalize_details(record.pop("details", None))
 
     with SessionLocal() as session:
         row = session.get(ListingRow, listing_id)
@@ -248,6 +356,17 @@ def update_listing(listing_id: str, record: dict) -> dict | None:
 
         if has_guide:
             row.guide_json = guide_to_json(guide_raw if isinstance(guide_raw, dict) else None)
+        if has_variants:
+            row.variants_json = (
+                json.dumps(variants_norm, ensure_ascii=False) if variants_norm else None
+            )
+            # variants 가 있으면 대표가는 가장 작은 옵션가로 자동 보정.
+            if variants_norm:
+                row.price = min(v["price"] for v in variants_norm)
+        if has_details:
+            row.details_json = (
+                json.dumps(details_norm, ensure_ascii=False) if details_norm else None
+            )
 
         cover_bytes = _decode_cover_b64(cover_b64)
         if cover_bytes:

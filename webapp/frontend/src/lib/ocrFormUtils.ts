@@ -1,4 +1,41 @@
+import type { ListingVariant } from "../types";
+
 import type { ListingTab, OcrListingDraft } from "./listingTabs";
+
+/**
+ * OCR 가격 문자열에서 다중 단가 옵션을 추출.
+ * 예) "13,000(100g) / 25,000(200g) / 60,000(500g) / 110,000(1kg)"
+ *  → [{label: "100g", price: 13000}, {label: "200g", price: 25000}, ...]
+ * 단일 가격이거나 패턴이 안 맞으면 null.
+ */
+export function parseOcrPriceVariants(
+  raw: string | number | null | undefined
+): ListingVariant[] | null {
+  if (raw == null || raw === "" || typeof raw === "number") return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  // "숫자 + (라벨)" 패턴 추출. 라벨 안에 숫자·g·kg·인분·박·시간 등 허용.
+  const itemRe = /(\d[\d,]*)\s*\(\s*([^)]+?)\s*\)/g;
+  const items: ListingVariant[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = itemRe.exec(s)) !== null) {
+    const price = parseInt(m[1].replace(/,/g, ""), 10);
+    const label = m[2].trim();
+    if (!Number.isFinite(price) || price <= 0 || price >= 100_000_000) continue;
+    if (!label || label.length > 60) continue;
+    items.push({ label, price });
+  }
+  if (items.length < 2) return null;
+  // 라벨 중복 제거
+  const seen = new Set<string>();
+  const unique = items.filter((v) => {
+    if (seen.has(v.label)) return false;
+    seen.add(v.label);
+    return true;
+  });
+  return unique.length >= 2 ? unique : null;
+}
 
 /** OCR 가격 문자열 → 대표 1개 가격 + (선택) 다중 단가 안내 */
 export function parseOcrPrice(raw: string | number | null | undefined): {

@@ -71,7 +71,11 @@ export function useVoiceSession() {
       }
 
       // 폼에 이미 채워진 값(OCR/직접 입력)을 LLM 이 알 수 있도록 함께 전송.
-      const formSnapshot = useSellerFormVoice.getState().snapshotForm();
+      // 단, 사용자가 "처음부터 다시 시작" 을 선택했다면 폼 상태를 보내지 않는다.
+      const sfvState = useSellerFormVoice.getState();
+      // startMode 가 null 이면 폼이 비어있다는 뜻이므로 그대로 보내도 된다 (모두 빈 값).
+      const sendFormState = sfvState.startMode !== "fresh";
+      const formSnapshot = sendFormState ? sfvState.snapshotForm() : {};
       const result = await api.voiceTurn(
         blob,
         history,
@@ -110,8 +114,22 @@ export function useVoiceSession() {
             let description = String(merged.description || "").trim();
             const location = String(merged.location || "").trim();
 
-            const imgCat =
-              kind === "lodging" ? "lodging" : (sellerSector ?? "rural");
+            // 슬롯 category 를 우선 사용. 비어있으면 sellerSector(=rural 등) fallback.
+            // 체험 키워드("체험·축제·견학" 등) 가 들어 있으면 강제 experience.
+            const slotCategory = String(merged.category || "").trim();
+            const blob = `${title} ${description}`;
+            const looksExperience =
+              slotCategory === "experience" ||
+              /(체험|축제|투어|견학|수확\s*체험|낚시\s*체험|갯벌|만들기\s*체험|승마|트레킹|요리\s*교실)/.test(
+                blob
+              );
+            const category =
+              kind === "lodging"
+                ? "lodging"
+                : looksExperience
+                  ? "experience"
+                  : slotCategory || sellerSector || "rural";
+
             const descTask =
               !description || description.length < 12
                 ? api
@@ -120,19 +138,24 @@ export function useVoiceSession() {
                       title,
                       price: Math.round(price),
                       location,
-                      category: imgCat,
+                      category,
                     })
                     .then((r) => ({ description: r.description, guide: r.guide }))
                     .catch(() => ({ description, guide: null }))
                 : Promise.resolve({ description, guide: null });
 
             const { description: finalDesc, guide } = await descTask;
+            // prompt 에 매 호출 고유 토큰을 붙여 Pollinations 캐시 hit 을 차단.
+            // (백엔드에도 random seed 가 적용돼 있어 이중 보험)
+            const variantTag = `__variant_${Date.now()}_${Math.random()
+              .toString(36)
+              .slice(2, 8)}`;
             const coverB64 = await api
               .enhanceImagePrompt({
                 kind,
                 title,
                 location,
-                category: imgCat,
+                category,
                 description: finalDesc,
               })
               .then((enh) =>
@@ -140,16 +163,14 @@ export function useVoiceSession() {
                   kind,
                   title,
                   location,
-                  category: imgCat,
+                  category,
                   description: finalDesc,
-                  prompt_en: enh.prompt_en,
+                  prompt_en: `${enh.prompt_en} ${variantTag}`,
                 })
               )
               .then((r) => r.image_base64)
               .catch(() => undefined);
 
-            const category =
-              kind === "lodging" ? "lodging" : (sellerSector ?? "rural");
             await api.createListing({
               kind,
               category,

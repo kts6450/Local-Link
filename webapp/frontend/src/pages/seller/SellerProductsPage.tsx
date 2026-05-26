@@ -22,6 +22,7 @@ import {
   buildOcrImagePrompt,
   cleanOcrLocation,
   parseOcrPrice,
+  parseOcrPriceVariants,
 } from "../../lib/ocrFormUtils";
 import {
   LISTING_CATEGORIES,
@@ -35,7 +36,8 @@ import {
 } from "../../store/auth";
 import { useConversation } from "../../store/conversation";
 import { useSellerFormVoice } from "../../store/sellerFormVoice";
-import type { ListingGuide } from "../../types";
+import type { ListingDetails, ListingGuide, ListingVariant } from "../../types";
+import { VoiceFillButton } from "../../components/seller/VoiceFillButton";
 
 const STEP_BANNERS: Record<number, { emoji: string; title: string; sub: string; img: string }> = {
   1: {
@@ -99,6 +101,32 @@ export function SellerProductsPage() {
   const [promptSummary, setPromptSummary] = useState<string | null>(null);
   const [aiHint, setAiHint] = useState<string | null>(null);
   const [ocrPriceDetail, setOcrPriceDetail] = useState<string | null>(null);
+  // 가격·용량 옵션 — OCR 이 다중 단가를 감지하면 자동으로 후보가 채워진다.
+  const [variants, setVariants] = useState<ListingVariant[] | null>(null);
+  // 상세 정보 — 단위·원산지·생산자·유통기한·보관방법.
+  const [details, setDetails] = useState<ListingDetails>({});
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  // 한 번에 하나만 녹음 중이도록 잠금.
+  const [activeVoiceField, setActiveVoiceField] = useState<string | null>(null);
+  const voiceLockHandlers = useCallback(
+    (key: string) => ({
+      disabled: activeVoiceField !== null && activeVoiceField !== key,
+      onActiveChange: (active: boolean) =>
+        setActiveVoiceField(active ? key : null),
+    }),
+    [activeVoiceField]
+  );
+  // 음성 입력 후 단위/유통기한 등 짧은 텍스트는 끝의 마침표 제거 + 공백 정리.
+  const cleanShort = (s: string) =>
+    s
+      .replace(/[.!?。·]+$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  // 「열 개」, "20" 같은 숫자 표현을 정수로.
+  const extractDigits = (s: string) => {
+    const m = s.match(/(\d{1,6})/);
+    return m ? m[1] : "";
+  };
 
   const selectListingTab = useCallback((tab: ListingTab) => {
     setListingTab(tab);
@@ -126,6 +154,16 @@ export function SellerProductsPage() {
     const { price: parsedPrice, detailNote } = parseOcrPrice(f.price?.value);
     if (parsedPrice) setPrice(parsedPrice);
     setOcrPriceDetail(detailNote);
+    // 다중 단가 패턴이면 옵션 후보로 자동 추출 (셀러가 한 번 확인만 하면 됨).
+    const ocrVariants = parseOcrPriceVariants(f.price?.value);
+    if (ocrVariants && ocrVariants.length >= 2) {
+      setVariants(ocrVariants);
+      // 대표가는 가장 작은 옵션가로 정렬해 두면 카드 노출 시 자연스러움.
+      const minPrice = Math.min(...ocrVariants.map((v) => v.price));
+      if (Number.isFinite(minPrice) && minPrice > 0) setPrice(String(minPrice));
+    } else {
+      setVariants(null);
+    }
     const ocrLocation =
       f.location?.value != null ? cleanOcrLocation(String(f.location.value)) : "";
     if (ocrLocation) setLocation(ocrLocation);
@@ -136,10 +174,46 @@ export function SellerProductsPage() {
       descText = descText ? `${descText}\n\n${tierLine}` : tierLine;
     }
     if (descText) setDescription(descText);
+    // 상세 정보 — OCR 이 뽑은 키를 그대로 폼 상태로 옮긴다.
+    const detailFromOcr: ListingDetails = {};
+    const detailKeys: (keyof ListingDetails)[] = [
+      "unit",
+      "origin",
+      "producer",
+      "shelf_life",
+      "storage_method",
+    ];
+    for (const k of detailKeys) {
+      const v = f[k]?.value;
+      if (v != null && String(v).trim()) {
+        detailFromOcr[k] = String(v).trim();
+      }
+    }
+    // quantity 필드 — 「100g/200g/...」 같은 중량 표기는 stock 으로 넣으면 안 되고,
+    // 단위(unit) 또는 옵션(variants)으로 옮긴다. 「10개/5박스」 같은 진짜 개수일
+    // 때만 재고 수량으로 채운다.
     if (f.quantity?.value != null && tab !== "lodging") {
-      const q = String(f.quantity.value);
-      const m = q.match(/(\d+)/);
-      if (m) setStock(m[1]);
+      const qRaw = String(f.quantity.value).trim();
+      const isWeight = /\d+\s*(g|kg|그램|킬로|키로|cc|ml|리터|l)\b/i.test(qRaw);
+      const countMatch = qRaw.match(
+        /^\s*(\d{1,5})\s*(개|박스|봉지?|봉|묶음|단|상자|꾸러미|병|팩)\s*$/
+      );
+      if (countMatch) {
+        // 진짜 개수만 stock 으로
+        setStock(countMatch[1]);
+      } else if (isWeight) {
+        // 중량 표기는 단위 칸으로 옮긴다 (단일가는 그대로, 다중 옵션이면 옵션이 우선이라 라벨로 충분).
+        if (!ocrVariants && !detailFromOcr.unit) {
+          // 첫 단위 토큰만 추출 (예: "100g / 200g / 500g / 1kg" → "100g")
+          const m = qRaw.match(/(\d+\s*(?:g|kg|그램|킬로|키로|cc|ml|리터|l))\b/i);
+          if (m) detailFromOcr.unit = m[1].replace(/\s+/g, "");
+        }
+      }
+      // 그 외(다른 형식)는 stock 을 함부로 채우지 않음 → 사용자가 직접 입력.
+    }
+    if (Object.keys(detailFromOcr).length > 0) {
+      setDetails((prev) => ({ ...prev, ...detailFromOcr }));
+      setDetailsOpen(true);
     }
     const imgHint = buildOcrImagePrompt(f, tab, String(f.title?.value ?? ""));
     if (imgHint) setImagePromptKo(imgHint);
@@ -152,6 +226,8 @@ export function SellerProductsPage() {
       ...(descText ? { description: descText } : {}),
       kind: tab === "lodging" ? "lodging" : "product",
     });
+    // 음성 도우미 시작 방식(이어서/처음부터)을 다시 묻도록 초기화.
+    useSellerFormVoice.getState().setStartMode(null);
     setAiHint("OCR 결과를 채웠어요. 「확인 필요」 항목은 꼭 검토해 주세요.");
     setStep(1);
   }, []);
@@ -243,13 +319,17 @@ export function SellerProductsPage() {
         setImagePromptEn(promptEn);
         setPromptSummary(enhanced.summary_ko);
       }
+      // 매 호출 고유 토큰을 붙여 Pollinations 캐시 hit 을 차단 (백엔드 seed 와 이중 보험)
+      const variantTag = `__variant_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
       const r = await api.draftListingImage({
         kind: k,
         title: t,
         location: location.trim(),
         category: cat,
         description: description.trim(),
-        prompt_en: promptEn,
+        prompt_en: `${promptEn} ${variantTag}`,
       });
       setCoverDataUrl(`data:${r.mime_type};base64,${r.image_base64}`);
       setStep(3);
@@ -372,6 +452,13 @@ export function SellerProductsPage() {
         if (l.stock != null) setStock(String(l.stock));
         if (l.max_guests != null) setMaxGuests(String(l.max_guests));
         setCoverDataUrl(l.cover_image_url ?? null);
+        if (l.variants && l.variants.length >= 2) setVariants(l.variants);
+        if (l.details && typeof l.details === "object") {
+          setDetails(l.details);
+          if (Object.values(l.details).some((v) => v && String(v).trim())) {
+            setDetailsOpen(true);
+          }
+        }
         setStep(1);
       })
       .catch(() => {
@@ -451,6 +538,13 @@ export function SellerProductsPage() {
           k === "lodging" ? Math.max(1, parseInt(maxGuests, 10) || 4) : null,
         cover_image_base64: coverIsNew ? coverDataUrl!.split(",", 2)[1] : undefined,
         guide: guide ?? undefined,
+        variants:
+          k === "product" && variants && variants.length >= 2 ? variants : undefined,
+        details:
+          k === "product" &&
+          Object.values(details).some((v) => v && String(v).trim())
+            ? details
+            : undefined,
       };
       const saved = editId
         ? await api.updateListing(editId, payload)
@@ -475,6 +569,9 @@ export function SellerProductsPage() {
       setPromptSummary(null);
       setAiHint(null);
       setOcrPriceDetail(null);
+      setVariants(null);
+      setDetails({});
+      setDetailsOpen(false);
       setStep(1);
       if (editId) {
         navigate("/seller");
@@ -612,39 +709,394 @@ export function SellerProductsPage() {
                   )}
                   <div>
                     <label className="label-step">이름</label>
-                    <input
-                      className="input-field text-lg"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      required
-                      placeholder="예: 올해 햅쌀 10kg"
-                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="input-field text-lg flex-1"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        required
+                        placeholder="예: 올해 햅쌀 10kg"
+                      />
+                      {!title.trim() ? (
+                        <VoiceFillButton
+                          tone="emerald"
+                          size="lg"
+                          hint="상품 이름을 말로 채우기"
+                          onText={(t) => setTitle(cleanShort(t))}
+                          {...voiceLockHandlers("title")}
+                        />
+                      ) : null}
+                    </div>
                   </div>
                   <div>
                     <label className="label-step">가격 (원)</label>
-                    <input
-                      className="input-field text-lg"
-                      inputMode="numeric"
-                      value={price}
-                      onChange={(e) => setPrice(e.target.value.replace(/\D/g, ""))}
-                      required
-                      placeholder="42000"
-                    />
-                    {ocrPriceDetail ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="input-field text-lg flex-1"
+                        inputMode="numeric"
+                        value={price}
+                        onChange={(e) => setPrice(e.target.value.replace(/\D/g, ""))}
+                        required
+                        placeholder="42000"
+                      />
+                      {!price.trim() ? (
+                        <VoiceFillButton
+                          tone="emerald"
+                          size="lg"
+                          hint="가격을 숫자로 말로 채우기"
+                          onText={(t) => {
+                            const d = extractDigits(t);
+                            if (d) setPrice(d);
+                          }}
+                          {...voiceLockHandlers("price")}
+                        />
+                      ) : null}
+                    </div>
+                    {ocrPriceDetail && !variants ? (
                       <p className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
                         메모에 여러 단가가 있습니다. 대표 가격만 넣었어요 — 전체: {ocrPriceDetail}
                       </p>
                     ) : null}
+                    {variants && variants.length >= 2 && listingTab !== "lodging" ? (
+                      <div className="mt-3 rounded-2xl border-2 border-emerald-200 bg-emerald-50/70 p-4">
+                        <div className="flex items-start gap-2 mb-3">
+                          <span className="text-2xl leading-none">🧺</span>
+                          <div className="flex-1">
+                            <p className="font-semibold text-emerald-900 text-base">
+                              용량·가격 옵션을 {variants.length}개 찾았어요
+                            </p>
+                            <p className="text-xs text-emerald-700 mt-0.5">
+                              구매하는 분이 직접 골라 살 수 있게 「옵션」으로 등록해 드려요. 잘못된 항목이 있으면 ✕ 로 빼 주세요.
+                            </p>
+                          </div>
+                        </div>
+                        <ul className="space-y-2">
+                          {variants.map((v, idx) => (
+                            <li
+                              key={`${v.label}-${idx}`}
+                              className="flex items-center gap-2 bg-white rounded-xl px-3 py-2 border border-emerald-100"
+                            >
+                              <input
+                                className="input-field text-sm flex-1 max-w-[140px]"
+                                value={v.label}
+                                onChange={(e) => {
+                                  const next = [...variants];
+                                  next[idx] = { ...v, label: e.target.value };
+                                  setVariants(next);
+                                }}
+                                placeholder="100g"
+                              />
+                              <span className="text-slate-400 text-sm">·</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                className="input-field text-sm flex-1 max-w-[140px]"
+                                value={String(v.price)}
+                                onChange={(e) => {
+                                  const next = [...variants];
+                                  next[idx] = {
+                                    ...v,
+                                    price: Math.max(0, parseInt(e.target.value, 10) || 0),
+                                  };
+                                  setVariants(next);
+                                }}
+                                placeholder="13000"
+                              />
+                              <span className="text-xs text-slate-500">원</span>
+                              <button
+                                type="button"
+                                aria-label="옵션 삭제"
+                                className="text-slate-400 hover:text-rose-500 text-xl leading-none px-1"
+                                onClick={() => {
+                                  const next = variants.filter((_, i) => i !== idx);
+                                  setVariants(next.length >= 2 ? next : null);
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="mt-3 flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            className="text-xs px-3 py-1.5 rounded-full bg-white border border-emerald-200 text-emerald-800 font-medium hover:bg-emerald-100"
+                            onClick={() =>
+                              setVariants([
+                                ...variants,
+                                { label: "", price: 0 },
+                              ])
+                            }
+                          >
+                            + 옵션 추가
+                          </button>
+                          <button
+                            type="button"
+                            className="text-xs px-3 py-1.5 rounded-full bg-white border border-rose-200 text-rose-700 font-medium hover:bg-rose-50"
+                            onClick={() => setVariants(null)}
+                          >
+                            옵션 안 쓸래요 (단일가)
+                          </button>
+                          <span className="text-[11px] text-emerald-700 ml-auto">
+                            대표가는 가장 작은 옵션가로 자동 표시돼요
+                          </span>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                   <div>
                     <label className="label-step">동네 (시·군)</label>
-                    <input
-                      className="input-field text-lg"
-                      value={location}
-                      onChange={(e) => setLocation(e.target.value)}
-                      placeholder="전북 김제시"
-                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="input-field text-lg flex-1"
+                        value={location}
+                        onChange={(e) => setLocation(e.target.value)}
+                        placeholder="전북 김제시"
+                      />
+                      {!location.trim() ? (
+                        <VoiceFillButton
+                          tone="emerald"
+                          size="lg"
+                          hint="시·군을 말로 채우기"
+                          onText={(t) => setLocation(cleanShort(t))}
+                          {...voiceLockHandlers("location")}
+                        />
+                      ) : null}
+                    </div>
                   </div>
+                  {listingTab !== "lodging" ? (
+                    <div>
+                      <label className="label-step">재고 수량</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          className="input-field text-lg flex-1"
+                          inputMode="numeric"
+                          value={stock}
+                          onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))}
+                          placeholder="10"
+                        />
+                        {!stock.trim() ? (
+                          <VoiceFillButton
+                            tone="emerald"
+                            size="lg"
+                            hint="재고 수량을 숫자로 말로 채우기"
+                            onText={(t) => {
+                              const d = extractDigits(t);
+                              if (d) setStock(d);
+                            }}
+                            {...voiceLockHandlers("stock")}
+                          />
+                        ) : null}
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        지금 팔 수 있는 개수예요. 옵션이 있으면 옵션마다 따로 관리됩니다.
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="label-step">정원 (명)</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          className="input-field text-lg flex-1"
+                          inputMode="numeric"
+                          value={maxGuests}
+                          onChange={(e) => setMaxGuests(e.target.value.replace(/\D/g, ""))}
+                          placeholder="4"
+                        />
+                        {!maxGuests.trim() ? (
+                          <VoiceFillButton
+                            tone="emerald"
+                            size="lg"
+                            hint="정원을 숫자로 말로 채우기"
+                            onText={(t) => {
+                              const d = extractDigits(t);
+                              if (d) setMaxGuests(d);
+                            }}
+                            {...voiceLockHandlers("max_guests")}
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+
+                  {listingTab !== "lodging" ? (
+                    <div className="rounded-2xl border border-slate-200 bg-white">
+                      <button
+                        type="button"
+                        onClick={() => setDetailsOpen((v) => !v)}
+                        className="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-slate-50 rounded-2xl"
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="text-xl">📦</span>
+                          <span className="font-semibold text-slate-800">상세 정보</span>
+                          <span className="text-xs text-slate-500">
+                            (선택 — 적으면 구매하는 분이 더 잘 알아봐요)
+                          </span>
+                          {Object.values(details).filter((v) => v && String(v).trim())
+                            .length > 0 ? (
+                            <span className="ml-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold">
+                              {
+                                Object.values(details).filter(
+                                  (v) => v && String(v).trim()
+                                ).length
+                              }
+                              개 채움
+                            </span>
+                          ) : null}
+                        </span>
+                        <span
+                          className={`text-slate-400 transition-transform ${
+                            detailsOpen ? "rotate-180" : ""
+                          }`}
+                        >
+                          ▾
+                        </span>
+                      </button>
+                      {detailsOpen ? (
+                        <div className="px-4 pb-5 pt-1 space-y-4 border-t border-slate-100">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-sm font-semibold text-slate-700 block mb-1">
+                                단위
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  className="input-field flex-1"
+                                  value={details.unit ?? ""}
+                                  onChange={(e) =>
+                                    setDetails((d) => ({ ...d, unit: e.target.value }))
+                                  }
+                                  placeholder="kg / 개 / 박스 / 묶음"
+                                />
+                                {!(details.unit ?? "").trim() ? (
+                                  <VoiceFillButton
+                                    tone="emerald"
+                                    hint="단위를 말로 채우기 (예: 1킬로, 한 봉지)"
+                                    onText={(t) =>
+                                      setDetails((d) => ({ ...d, unit: cleanShort(t) }))
+                                    }
+                                    {...voiceLockHandlers("unit")}
+                                  />
+                                ) : null}
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                옵션이 없으면 1개를 어떻게 파는지 적어 주세요.
+                              </p>
+                            </div>
+                            <div>
+                              <label className="text-sm font-semibold text-slate-700 block mb-1">
+                                원산지·생산지
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  className="input-field flex-1"
+                                  value={details.origin ?? ""}
+                                  onChange={(e) =>
+                                    setDetails((d) => ({ ...d, origin: e.target.value }))
+                                  }
+                                  placeholder="경상북도 포항시 북구 기계면"
+                                />
+                                {!(details.origin ?? "").trim() ? (
+                                  <VoiceFillButton
+                                    tone="emerald"
+                                    hint="원산지를 말로 채우기"
+                                    onText={(t) =>
+                                      setDetails((d) => ({ ...d, origin: cleanShort(t) }))
+                                    }
+                                    {...voiceLockHandlers("origin")}
+                                  />
+                                ) : null}
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                동네보다 더 자세하게 — 농가가 있는 곳까지.
+                              </p>
+                            </div>
+                            <div>
+                              <label className="text-sm font-semibold text-slate-700 block mb-1">
+                                생산자·농가명
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  className="input-field flex-1"
+                                  value={details.producer ?? ""}
+                                  onChange={(e) =>
+                                    setDetails((d) => ({ ...d, producer: e.target.value }))
+                                  }
+                                  placeholder="기계 햇살 농원"
+                                />
+                                {!(details.producer ?? "").trim() ? (
+                                  <VoiceFillButton
+                                    tone="emerald"
+                                    hint="농가·생산자 이름을 말로 채우기"
+                                    onText={(t) =>
+                                      setDetails((d) => ({ ...d, producer: cleanShort(t) }))
+                                    }
+                                    {...voiceLockHandlers("producer")}
+                                  />
+                                ) : null}
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-sm font-semibold text-slate-700 block mb-1">
+                                유통기한
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  className="input-field flex-1"
+                                  value={details.shelf_life ?? ""}
+                                  onChange={(e) =>
+                                    setDetails((d) => ({ ...d, shelf_life: e.target.value }))
+                                  }
+                                  placeholder="냉장 7일 / 1년"
+                                />
+                                {!(details.shelf_life ?? "").trim() ? (
+                                  <VoiceFillButton
+                                    tone="emerald"
+                                    hint="유통기한을 말로 채우기"
+                                    onText={(t) =>
+                                      setDetails((d) => ({ ...d, shelf_life: cleanShort(t) }))
+                                    }
+                                    {...voiceLockHandlers("shelf_life")}
+                                  />
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="sm:col-span-2">
+                              <label className="text-sm font-semibold text-slate-700 block mb-1">
+                                보관 방법
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  className="input-field flex-1"
+                                  value={details.storage_method ?? ""}
+                                  onChange={(e) =>
+                                    setDetails((d) => ({
+                                      ...d,
+                                      storage_method: e.target.value,
+                                    }))
+                                  }
+                                  placeholder="서늘하고 통풍 잘 되는 곳 (실온/냉장/냉동)"
+                                />
+                                {!(details.storage_method ?? "").trim() ? (
+                                  <VoiceFillButton
+                                    tone="emerald"
+                                    hint="보관 방법을 말로 채우기"
+                                    onText={(t) =>
+                                      setDetails((d) => ({
+                                        ...d,
+                                        storage_method: cleanShort(t),
+                                      }))
+                                    }
+                                    {...voiceLockHandlers("storage_method")}
+                                  />
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               )}
 

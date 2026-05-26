@@ -65,12 +65,22 @@ def _seller_system() -> str:
 
 ## 등록에 필요한 것
 1. listing_type — 상품이면 product, 숙박·민박이면 lodging.
-2. title — 짧은 이름 (예: 올해 쌀 20킬로, 바닷가 민박 하룻밤).
-3. price — 원 단위 숫자만 (예 삼만원이면 30000).
-4. description — 무엇인지, 왜 좋은지 한두 문장.
-5. location — 어느 동네인지 (시·군까지).
-6. stock — 상품이면 개수 정도. 모르면 비워도 됩니다. 숙박이면 비움.
-7. max_guests — 숙박이면 몇 명까지인지. 상품이면 비움.
+2. category — 「체험·축제·낚시·수확체험·공방 만들기」 같이 직접 와서 즐기는 일정이면
+   "experience". 「공예·도자기·자수」처럼 만들어 파는 작품이면 "craft".
+   「쌀·과일·꿀·반찬·해산물」 같은 일반 농수산 특산이면 "rural" 또는 비워둠.
+3. title — 짧은 이름 (예: 올해 쌀 20킬로, 바닷가 민박 하룻밤, 갯벌 체험 한 시간).
+4. price — 원 단위 숫자만 (예 삼만원이면 30000).
+5. description — 무엇인지, 왜 좋은지 한두 문장.
+6. location — 어느 동네인지 (시·군까지).
+7. stock — 상품이면 개수 정도. 모르면 비워도 됩니다. 숙박·체험이면 비움.
+8. max_guests — 숙박이면 몇 명까지인지. 상품이면 비움.
+
+## 종류 판정 — 매우 중요
+- 사용자가 "체험·체험상품·체험거리·축제·일정·하루 동안·시간 단위·예약" 같은
+  말을 하면 listing_type=product, category=experience 로 판단합니다.
+  (체험은 별도 listing_type 이 아니라 product 의 한 카테고리로 처리)
+- "민박·펜션·하룻밤·1박·숙소·잠자리" 같은 말이 나오면 listing_type=lodging.
+- 그 외 "쌀·꿀·과일·반찬·생선" 같은 일반 특산은 listing_type=product, category=rural.
 
 하나씩만 묻고, 다 모이면 "이대로 올릴까요?" 하고 확인하세요.
 
@@ -136,6 +146,10 @@ _SELLER_SLOT_SCHEMA = {
             ],
         },
         "listing_type": {"type": ["string", "null"], "description": "product or lodging"},
+        "category": {
+            "type": ["string", "null"],
+            "description": "experience(체험·축제·일정), craft(공예·작품), rural(일반 특산), lodging(숙박)",
+        },
         "title": {"type": ["string", "null"]},
         "price": {"type": ["integer", "null"]},
         "description": {"type": ["string", "null"]},
@@ -182,6 +196,11 @@ def _form_state_to_seller_slots(form_state: dict) -> dict:
     listing_tab = form_state.get("listing_tab") or form_state.get("kind")
     if listing_tab in ("product", "lodging", "experience"):
         out["kind"] = "lodging" if listing_tab == "lodging" else "product"
+        if listing_tab == "experience":
+            out["category"] = "experience"
+    cat_v = form_state.get("category")
+    if isinstance(cat_v, str) and cat_v.strip():
+        out["category"] = cat_v.strip()
     stock_v = form_state.get("stock")
     if isinstance(stock_v, (int, float)):
         out["stock"] = int(stock_v)
@@ -217,6 +236,9 @@ def _augment_system_with_form_state(
     listing_tab = form_state.get("listing_tab") or form_state.get("kind")
     if listing_tab:
         pieces.append(f"- 종류(listing_type/kind): {listing_tab}")
+    category_v = form_state.get("category")
+    if isinstance(category_v, str) and category_v.strip():
+        pieces.append(f"- 카테고리(category): {category_v.strip()}")
     if not pieces:
         return system
     addendum = (
@@ -294,12 +316,28 @@ def _seller_rule_slots_from_blob(blob: str) -> dict:
         text,
     ):
         slots["kind"] = "lodging"
+        slots["category"] = "lodging"
+    elif re.search(
+        r"체험|축제|투어|견학|수확\s*체험|낚시\s*체험|갯벌|만들기\s*체험|"
+        r"공방\s*체험|승마|트레킹|요리\s*교실",
+        text,
+    ):
+        # 체험은 product 의 한 카테고리(category=experience)로 처리한다.
+        slots["kind"] = "product"
+        slots["category"] = "experience"
+    elif re.search(
+        r"공예|도자기?|자수|짚|옻|공방|전통\s*공예",
+        text,
+    ):
+        slots["kind"] = "product"
+        slots["category"] = "craft"
     elif re.search(
         r"상품|팔아|팝니다|물건|키로|킬로|kg|되|말|쌀|과일|꿀|약|한우|팥|콩",
         text,
         re.I,
     ):
         slots["kind"] = "product"
+        slots.setdefault("category", "rural")
 
     price = _extract_price_kr(text)
     if price is not None:

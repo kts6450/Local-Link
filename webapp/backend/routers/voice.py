@@ -49,6 +49,25 @@ def status():
     }
 
 
+@router.post("/asr")
+async def asr_only(audio: UploadFile = File(...)):
+    """LLM 호출 없이 ASR만 — 셀러 폼에서 단일 칸을 음성으로 채울 때 사용."""
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="empty audio")
+    try:
+        raw = transcribe_audio_bytes(audio_bytes)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"ASR 실패: {e}")
+    # 한국어 손글씨 톤·맞춤법 보정만 가볍게.
+    try:
+        correction = correct_asr_text(raw, mode="seller", history=[])
+        text = correction.text or raw
+    except Exception:
+        text = raw
+    return {"text": text.strip(), "raw": raw.strip()}
+
+
 @router.post("/turn")
 async def turn(
     audio: UploadFile = File(...),

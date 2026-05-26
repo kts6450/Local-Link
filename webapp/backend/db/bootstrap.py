@@ -74,6 +74,10 @@ def _ensure_sqlite_columns() -> None:
             conn.execute(text("UPDATE listings SET category = 'rural' WHERE category IS NULL OR category = ''"))
         if "guide_json" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN guide_json TEXT"))
+        if "variants_json" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN variants_json TEXT"))
+        if "details_json" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN details_json TEXT"))
 
         order_rows = conn.execute(text("PRAGMA table_info(orders)")).fetchall()
         order_cols = {r[1] for r in order_rows}

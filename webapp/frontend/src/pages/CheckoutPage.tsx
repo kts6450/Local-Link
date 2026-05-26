@@ -64,7 +64,11 @@ export function CheckoutPage() {
       .filter(Boolean) as { line: CartLine; listing: Listing }[];
   }, [lines, byId]);
 
-  const total = rows.reduce((s, r) => s + r.listing.price * r.line.quantity, 0);
+  const lineUnitPrice = (r: { line: CartLine; listing: Listing }) =>
+    r.line.variant_price != null && Number.isFinite(r.line.variant_price)
+      ? r.line.variant_price
+      : r.listing.price;
+  const total = rows.reduce((s, r) => s + lineUnitPrice(r) * r.line.quantity, 0);
 
   const placeOrder = async (payMode: "mock" | "card") => {
     if (rows.length === 0) return;
@@ -171,11 +175,23 @@ export function CheckoutPage() {
       ) : (
         <>
           <ul className="rounded-3xl border border-hades-line bg-white divide-y divide-hades-line shadow-md overflow-hidden">
-            {rows.map(({ line, listing }) => (
-              <li key={`${line.listingId}-${line.stay_start ?? ""}`} className="p-5 flex flex-wrap gap-4 items-center">
+            {rows.map(({ line, listing }) => {
+              const unit = lineUnitPrice({ line, listing });
+              return (
+              <li
+                key={`${line.listingId}-${line.stay_start ?? ""}-${line.variant_label ?? ""}`}
+                className="p-5 flex flex-wrap gap-4 items-center"
+              >
                 <span className="text-4xl">{listing.emoji}</span>
                 <div className="flex-1 min-w-[200px]">
-                  <p className="font-bold text-lg">{listing.title}</p>
+                  <p className="font-bold text-lg">
+                    {listing.title}
+                    {line.variant_label ? (
+                      <span className="ml-2 text-sm font-semibold text-shop-tealDark">
+                        ({line.variant_label})
+                      </span>
+                    ) : null}
+                  </p>
                   {listing.category === "experience" && line.stay_start ? (
                     <p className="text-xs text-shop-tealDark font-semibold">
                       체험일 {line.stay_start} · {line.quantity}명
@@ -186,7 +202,7 @@ export function CheckoutPage() {
                     </p>
                   ) : null}
                   <p className="text-sm text-hades-muted">
-                    {listing.price.toLocaleString()}원 ×
+                    {unit.toLocaleString()}원 ×
                     <input
                       type="number"
                       min={1}
@@ -197,24 +213,28 @@ export function CheckoutPage() {
                           line.listingId,
                           parseInt(e.target.value, 10) || 1,
                           line.stay_start,
-                          line.stay_end
+                          line.stay_end,
+                          line.variant_label
                         )
                       }
                     />
                   </p>
                 </div>
                 <div className="font-bold text-lg text-shop-tealDark">
-                  {(listing.price * line.quantity).toLocaleString()}원
+                  {(unit * line.quantity).toLocaleString()}원
                 </div>
                 <button
                   type="button"
                   className="text-sm text-red-600 font-semibold"
-                  onClick={() => remove(line.listingId, line.stay_start, line.stay_end)}
+                  onClick={() =>
+                    remove(line.listingId, line.stay_start, line.stay_end, line.variant_label)
+                  }
                 >
                   빼기
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
 
           <div className="rounded-3xl border border-hades-line bg-slate-50 p-6 flex justify-between items-center">
