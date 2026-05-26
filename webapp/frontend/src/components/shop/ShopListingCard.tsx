@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
 
-import { listingDemoRating, listingReviewCount } from "../../lib/listingDisplay";
 import type { Listing } from "../../types";
 import { SafeImage } from "./SafeImage";
 
@@ -23,8 +22,8 @@ function categoryBadge(listing: Listing): { label: string; tone: string } {
 export function ShopListingCard({ listing, onAdd, rank }: Props) {
   const realRating = typeof listing.rating === "number" ? listing.rating : 0;
   const realReviews = listing.review_count ?? 0;
-  const rating = realRating > 0 ? realRating.toFixed(1) : listingDemoRating(listing.id);
-  const reviews = realReviews > 0 ? realReviews : listingReviewCount(listing.id);
+  const rating = realRating > 0 ? realRating.toFixed(1) : null;
+  const reviews = realReviews;
   const soldOut =
     listing.kind === "product" && listing.stock !== null && listing.stock <= 0;
   const cat = categoryBadge(listing);
@@ -72,15 +71,19 @@ export function ShopListingCard({ listing, onAdd, rank }: Props) {
         </div>
 
         <div className="p-5 sm:p-6 flex-1 flex flex-col">
-          <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-hades-muted">
-            <span className="inline-flex items-center gap-1 text-amber-500">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                <path d="M12 2.5l2.95 6 6.6.96-4.78 4.66 1.13 6.58L12 17.6l-5.9 3.1 1.13-6.58L2.45 9.46l6.6-.96L12 2.5z" />
-              </svg>
-              <span className="text-brand-ink font-bold tabular-nums">{rating}</span>
-            </span>
-            <span className="text-hades-muted/70 tabular-nums">({reviews}개 리뷰)</span>
-          </div>
+          {reviews > 0 && rating ? (
+            <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-hades-muted">
+              <span className="inline-flex items-center gap-1 text-amber-500">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                  <path d="M12 2.5l2.95 6 6.6.96-4.78 4.66 1.13 6.58L12 17.6l-5.9 3.1 1.13-6.58L2.45 9.46l6.6-.96L12 2.5z" />
+                </svg>
+                <span className="text-brand-ink font-bold tabular-nums">{rating}</span>
+              </span>
+              <span className="text-hades-muted/70 tabular-nums">({reviews}개 리뷰)</span>
+            </div>
+          ) : (
+            <div className="text-xs text-hades-muted/50">아직 리뷰가 없습니다</div>
+          )}
           <h3 className="mt-2 font-bold text-lg sm:text-xl text-brand-ink line-clamp-2 leading-snug tracking-tight">
             {listing.title}
           </h3>

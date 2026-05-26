@@ -32,7 +32,12 @@ export function ConsumerLayout() {
 
           <div className="flex items-center gap-3 sm:gap-4 shrink-0">
             <span className="hidden xl:inline text-sm font-medium text-hades-muted">
-              {displayName}님
+              <Link
+                to="/mypage"
+                className="font-semibold text-brand-ink hover:underline transition-all cursor-pointer"
+              >
+                {displayName}님
+              </Link>
               {role === "master" ? " · 운영" : ""}
             </span>
             {role === "seller" || role === "master" ? (

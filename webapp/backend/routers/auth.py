@@ -7,6 +7,7 @@ from services.auth_service import (
     AuthError,
     login_user,
     register_user,
+    update_user_profile,
     user_from_token_payload,
 )
 from services.auth_tokens import decode_access_token
@@ -69,3 +70,35 @@ def post_login(body: LoginBody):
 @router.get("/me")
 def get_me(user: dict = Depends(get_current_user)):
     return {"user": user}
+
+
+class UpdateProfileBody(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    current_password: str | None = Field(default=None, max_length=128)
+    new_password: str | None = Field(default=None, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def _pw_len(cls, v: str | None) -> str | None:
+        if v is not None and len(v) < 8:
+            raise ValueError("새 비밀번호는 8자 이상이어야 합니다.")
+        return v
+
+
+@router.patch("/me")
+def patch_me(body: UpdateProfileBody, user: dict = Depends(get_current_user)):
+    """닉네임 변경 및/또는 비밀번호 변경."""
+    if user.get("role") == "master":
+        raise HTTPException(status_code=403, detail="마스터 계정은 수정할 수 없습니다.")
+    if body.new_password and not body.current_password:
+        raise HTTPException(status_code=400, detail="현재 비밀번호를 입력해 주세요.")
+    try:
+        result = update_user_profile(
+            user_id=user.get("id") or "",
+            display_name=body.display_name,
+            current_password=body.current_password,
+            new_password=body.new_password,
+        )
+        return result
+    except AuthError as e:
+        raise HTTPException(status_code=e.status, detail=e.message) from e

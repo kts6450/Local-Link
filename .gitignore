@@ -28,3 +28,17 @@ webapp/backend/data/runtime/
 webapp/frontend/verify*.png
 webapp/frontend/verify.mjs
 webapp/backend/_smoke.py
+
+# Python virtual environments
+venv/
+.venv/
+env/
+.env/
+webapp/backend/venv/
+
+# Local model checkpoint directories
+best1/
+best2/
+best3/
+
+

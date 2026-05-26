@@ -97,6 +97,15 @@ export const api = {
 
   getMe: () => getJson<{ user: AuthUser }>("/api/auth/me"),
 
+  updateProfile: (body: {
+    display_name?: string;
+    current_password?: string;
+    new_password?: string;
+  }) =>
+    postJson<{ token: string; user: AuthUser }>("/api/auth/me", body, {
+      method: "PATCH",
+    } as RequestInit),
+
   getStatus: () => getJson<VoiceStatus>("/api/voice/status"),
   getBrand: () => getJson<Brand>("/api/marketplace/brand"),
   getFeatureFlags: () => getJson<{ items: FeatureFlagItem[] }>("/api/marketplace/features"),
@@ -266,6 +275,13 @@ export const api = {
         created_at: string;
       }[];
     }>(`/api/marketplace/listings/${listingId}/reviews`),
+  getReviewsSummary: (listingId: string) =>
+    getJson<{
+      status: string;
+      summary: string;
+      count: number;
+      message?: string;
+    }>(`/api/marketplace/listings/${listingId}/reviews/summary`),
   postReview: (listingId: string, body: { rating: number; body: string; order_id?: string }) =>
     postJson<{
       id: string;
@@ -273,6 +289,20 @@ export const api = {
       body: string;
       created_at: string;
     }>(`/api/marketplace/listings/${listingId}/reviews`, body),
+
+  getMyReviews: () =>
+    getJson<{
+      id: string;
+      listing_id: string;
+      order_id: string | null;
+      user_id: string;
+      user_name: string;
+      rating: number;
+      body: string;
+      created_at: string;
+      listing_title: string;
+      listing_cover_image: string | null;
+    }[]>("/api/marketplace/listings/reviews/mine"),
 
   getListingLocalGuide: (listingId: string) =>
     getJson<{ tourism: Record<string, unknown>; weather: Record<string, unknown> }>(

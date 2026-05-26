@@ -81,3 +81,12 @@ class ReviewRow(Base):
     rating: Mapped[int] = mapped_column(Integer)
     body: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[str] = mapped_column(String(40), index=True)
+
+
+class ReviewSummaryRow(Base):
+    __tablename__ = "review_summaries"
+
+    listing_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    summary: Mapped[str] = mapped_column(Text)
+    hash: Mapped[str] = mapped_column(String(64))
+    updated_at: Mapped[str] = mapped_column(String(40))

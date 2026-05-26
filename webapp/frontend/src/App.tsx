@@ -14,6 +14,7 @@ import { SellerDashboardPage } from "./pages/seller/SellerDashboardPage";
 import { SellerOrdersPage } from "./pages/seller/SellerOrdersPage";
 import { SellerProductsPage } from "./pages/seller/SellerProductsPage";
 import { SellerSnsPage } from "./pages/seller/SellerSnsPage";
+import { MyPage } from "./pages/MyPage";
 
 export default function App() {
   return (
@@ -30,6 +31,14 @@ export default function App() {
           element={
             <RequireRole role="consumer">
               <CheckoutPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="mypage"
+          element={
+            <RequireRole role="consumer">
+              <MyPage />
             </RequireRole>
           }
         />

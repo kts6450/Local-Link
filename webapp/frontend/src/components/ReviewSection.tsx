@@ -32,13 +32,40 @@ export function ReviewSection({ listingId }: { listingId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // AI 리뷰 요약 관련 상태
+  const [summaryText, setSummaryText] = useState<string | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+
+  const fetchSummary = async () => {
+    setLoadingSummary(true);
+    try {
+      const res = await api.getReviewsSummary(listingId);
+      if (res.status === "success" && res.summary) {
+        setSummaryText(res.summary);
+      } else {
+        setSummaryText(null);
+      }
+    } catch (err) {
+      console.error("AI 요약 로드 실패:", err);
+      setSummaryText(null);
+    } finally {
+      setLoadingSummary(false);
+    }
+  };
+
   const reload = async () => {
     setLoading(true);
+    setSummaryText(null);
     try {
       const r = await api.getReviews(listingId);
       setReviews(r.items);
       setAverage(r.average);
       setCount(r.count);
+      
+      // 리뷰 개수가 3개 이상일 때 요약 데이터 조회
+      if (r.count >= 3) {
+        void fetchSummary();
+      }
     } catch {
       setReviews([]);
     } finally {
@@ -84,6 +111,32 @@ export function ReviewSection({ listingId }: { listingId: string }) {
         </div>
         <p className="text-sm text-hades-muted">{count}개의 리뷰</p>
       </header>
+
+      {/* AI 리뷰 요약 카드 */}
+      {count >= 3 && (
+        <div className="rounded-2xl border border-brand-line bg-brand-warm/60 p-5 space-y-2 relative overflow-hidden transition-all duration-300">
+          <div className="absolute top-0 right-0 p-3">
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-brand-ink/10 text-brand-ink">
+              AI 요약
+            </span>
+          </div>
+          <p className="font-bold text-brand-ink flex items-center gap-1.5">
+            ✨ AI 리뷰 한눈에 보기
+          </p>
+          {loadingSummary ? (
+            <div className="space-y-2 py-2">
+              <div className="h-4 bg-slate-200/60 rounded w-3/4 animate-pulse"></div>
+              <div className="h-4 bg-slate-200/60 rounded w-5/6 animate-pulse"></div>
+            </div>
+          ) : summaryText ? (
+            <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+              {summaryText}
+            </p>
+          ) : (
+            <p className="text-sm text-hades-muted italic">리뷰 분석 대기 중...</p>
+          )}
+        </div>
+      )}
 
       {canWrite && !already && (
         <form
