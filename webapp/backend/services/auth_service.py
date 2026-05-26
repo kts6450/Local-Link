@@ -146,6 +146,39 @@ def login_user(*, email: str, password: str) -> dict:
     return {"token": token, "user": user_public(row)}
 
 
+def update_user_profile(
+    *,
+    user_id: str,
+    display_name: str | None = None,
+    current_password: str | None = None,
+    new_password: str | None = None,
+) -> dict:
+    """닉네임 변경 및/또는 비밀번호 변경. 변경 후 새 토큰과 유저 정보를 반환."""
+    if not display_name and not new_password:
+        raise AuthError("변경할 내용이 없습니다.")
+
+    with SessionLocal() as session:
+        row = session.scalar(select(UserRow).where(UserRow.id == user_id))
+        if not row:
+            raise AuthError("사용자를 찾을 수 없습니다.", status=404)
+
+        # 비밀번호 변경
+        if new_password:
+            if not current_password or not verify_password(current_password, row.password_hash):
+                raise AuthError("현재 비밀번호가 올바르지 않습니다.", status=401)
+            row.password_hash = hash_password(new_password)
+
+        # 닉네임 변경
+        if display_name:
+            row.display_name = display_name.strip()
+
+        session.commit()
+        session.refresh(row)
+
+    token = create_access_token(_user_to_token_payload(row))
+    return {"token": token, "user": user_public(row)}
+
+
 def user_from_token_payload(payload: dict) -> dict:
     return {
         "id": payload.get("sub"),

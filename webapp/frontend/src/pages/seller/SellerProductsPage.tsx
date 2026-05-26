@@ -102,6 +102,7 @@ export function SellerProductsPage() {
   const [promptSummary, setPromptSummary] = useState<string | null>(null);
   const [aiHint, setAiHint] = useState<string | null>(null);
   const [ocrPriceDetail, setOcrPriceDetail] = useState<string | null>(null);
+  const aiImageRunningRef = useRef(false); // 중복 실행 방지
   // 가격·용량 옵션 — OCR 이 다중 단가를 감지하면 자동으로 후보가 채워진다.
   const [variants, setVariants] = useState<ListingVariant[] | null>(null);
   // 상세 정보 — 단위·원산지·생산자·유통기한·보관방법.
@@ -313,6 +314,9 @@ export function SellerProductsPage() {
       setStep(1);
       return;
     }
+    // 버튼 클릭 + 음성 명령 동시에 들어올 경우 중복 실행 방지
+    if (aiImageRunningRef.current) return;
+    aiImageRunningRef.current = true;
     setAiBusy(true);
     setAiHint(null);
     try {
@@ -359,6 +363,7 @@ export function SellerProductsPage() {
       );
     } finally {
       setAiBusy(false);
+      aiImageRunningRef.current = false;
     }
   }, [
     listingTab,
@@ -488,12 +493,11 @@ export function SellerProductsPage() {
 
   // 대표 이미지 생성은 외부 키 없이도 동작하므로 별도 가드는 두지 않는다.
 
-  // 제목이 바뀌면 이전 영문 프롬프트를 비워서 새 상품에 옛 prompt 가 재사용되는 걸 막는다.
-  // (사용자가 직접 적은 한국어 힌트 imagePromptKo 는 보존)
+  // 제목이나 한국어 힌트가 바뀌면 영문 프롬프트 캐시를 초기화해서 항상 최신 힌트가 반영되게 한다.
   useEffect(() => {
     setImagePromptEn("");
     setPromptSummary(null);
-  }, [title]);
+  }, [title, imagePromptKo]);
 
   const onPickCover = (files: FileList | null) => {
     const f = files?.[0];

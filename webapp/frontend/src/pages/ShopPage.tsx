@@ -6,6 +6,7 @@ import { BestListings } from "../components/shop/BestListings";
 import { LandingFeatures } from "../components/marketing/LandingFeatures";
 import { LandingMission } from "../components/marketing/LandingMission";
 import { LandingReviews } from "../components/marketing/LandingReviews";
+import { ParallaxBanner } from "../components/marketing/ParallaxBanner";
 import { useListingsPoll } from "../hooks/useListingsPoll";
 import {
   filterShopListings,
@@ -253,6 +254,7 @@ export function ShopPage() {
           <BestListings />
           <LandingFeatures />
           <LandingMission />
+          <ParallaxBanner />
           <LandingReviews />
         </>
       ) : null}
