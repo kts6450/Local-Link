@@ -11,6 +11,7 @@ import {
   useAuthRole,
   useAuthSellerSector,
 } from "../store/auth";
+import { useConversation } from "../store/conversation";
 
 const sectorPill =
   "px-6 py-2.5 rounded-full text-sm sm:text-base font-bold transition-all whitespace-nowrap";
@@ -62,6 +63,7 @@ export function SellerLayout() {
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
               <Link
                 to="/seller/products"
+                onClick={() => useConversation.getState().reset()}
                 className="inline-flex items-center gap-1.5 rounded-full bg-brand-ink text-white text-sm sm:text-base font-bold px-5 py-2.5 sm:px-6 sm:py-3 hover:bg-brand-ink/90 active:scale-[0.98] transition-all shadow-soft"
               >
                 <span className="text-lg leading-none" aria-hidden>+</span>
