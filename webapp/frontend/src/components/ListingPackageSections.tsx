@@ -94,7 +94,7 @@ export function ListingInfoSections({ listing }: { listing: Listing }) {
   const steps = isMarketProduct ? [] : (g?.steps ?? []);
   const highlightsTitle = isExperience ? "체험 포인트" : "상품 특징";
 
-  // 상세 정보 — 마켓 상품 한정. 빈 값은 그리지 않는다.
+  // 상세 정보 — 종류별 필드. 빈 값은 그리지 않는다.
   const detailRows: { label: string; value?: string | null; icon: string }[] = [];
   const d = listing.details;
   if (isMarketProduct && d) {
@@ -106,6 +106,32 @@ export function ListingInfoSections({ listing }: { listing: Listing }) {
       detailRows.push({ label: "유통기한", value: d.shelf_life, icon: "⏳" });
     if (d.storage_method?.trim())
       detailRows.push({ label: "보관 방법", value: d.storage_method, icon: "🧊" });
+  } else if (isExperience && d) {
+    if (d.duration?.trim())
+      detailRows.push({ label: "소요 시간", value: d.duration, icon: "⏱️" });
+    if (d.meeting_point?.trim())
+      detailRows.push({ label: "모임 장소", value: d.meeting_point, icon: "📍" });
+    if (d.includes?.trim())
+      detailRows.push({ label: "포함 사항", value: d.includes, icon: "✅" });
+    if (d.what_to_bring?.trim())
+      detailRows.push({ label: "준비물", value: d.what_to_bring, icon: "🎒" });
+    if (d.min_age?.trim())
+      detailRows.push({ label: "참가 연령", value: d.min_age, icon: "👨‍👩‍👧" });
+    if (d.weather_policy?.trim())
+      detailRows.push({ label: "날씨·취소", value: d.weather_policy, icon: "🌦️" });
+  } else if (listing.kind === "lodging" && d) {
+    if (d.check_in?.trim())
+      detailRows.push({ label: "체크인", value: d.check_in, icon: "🔑" });
+    if (d.check_out?.trim())
+      detailRows.push({ label: "체크아웃", value: d.check_out, icon: "🚪" });
+    if (d.amenities?.trim())
+      detailRows.push({ label: "편의 시설", value: d.amenities, icon: "🛋️" });
+    if (d.breakfast?.trim())
+      detailRows.push({ label: "조식", value: d.breakfast, icon: "🍳" });
+    if (d.parking?.trim())
+      detailRows.push({ label: "주차", value: d.parking, icon: "🅿️" });
+    if (d.pet_policy?.trim())
+      detailRows.push({ label: "반려동물", value: d.pet_policy, icon: "🐾" });
   }
 
   return (
@@ -118,7 +144,9 @@ export function ListingInfoSections({ listing }: { listing: Listing }) {
 
       {detailRows.length > 0 && (
         <section>
-          <h3 className="font-bold text-hades-text text-xl mb-4">상품 정보</h3>
+          <h3 className="font-bold text-hades-text text-xl mb-4">
+            {isExperience ? "체험 정보" : listing.kind === "lodging" ? "숙박 정보" : "상품 정보"}
+          </h3>
           <dl className="rounded-2xl border border-hades-line bg-white divide-y divide-slate-100 overflow-hidden">
             {detailRows.map((r) => (
               <div

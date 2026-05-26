@@ -10,9 +10,9 @@ export const LISTING_TABS: {
   sub: string;
   emoji: string;
 }[] = [
-  { id: "product", label: "상품", sub: "농·축·수·특산", emoji: "🛒" },
-  { id: "lodging", label: "숙박", sub: "숙소·민박", emoji: "🏠" },
-  { id: "experience", label: "체험", sub: "일정·투어", emoji: "🧺" },
+  { id: "product", label: "특산", sub: "농·축·수·특산", emoji: "🛒" },
+  { id: "lodging", label: "스테이", sub: "숙소·민박", emoji: "🏠" },
+  { id: "experience", label: "체험", sub: "일정·투어", emoji: "🌾" },
 ];
 
 export function tabLabel(tab: ListingTab): string {
@@ -83,4 +83,6 @@ export type OcrListingDraft = {
   a2a_pipeline?: "off" | "rules" | "a2a" | "max" | string;
   a2a_steps?: OcrA2aStep[];
   variants?: import("../types").ListingVariant[] | null;
+  /** clova+claude | claude_vision | clova | none */
+  ocr_engine?: string;
 };

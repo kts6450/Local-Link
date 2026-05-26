@@ -1,9 +1,10 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { api } from "../../lib/api";
 import type { ListingTab, OcrListingDraft } from "../../lib/listingTabs";
 import { tabLabel } from "../../lib/listingTabs";
 import { useSellerFormVoice } from "../../store/sellerFormVoice";
+import { VoiceFillButton } from "./VoiceFillButton";
 
 const FIELD_LABELS: Record<string, string> = {
   title: "이름",
@@ -23,8 +24,42 @@ const FIELD_LABELS: Record<string, string> = {
   highlights: "판매 특장점",
 };
 
+/** OCR 결과에서 바로 고칠 수 있는 필드 (표시 순서) */
+const EDITABLE_FIELD_KEYS = [
+  "title",
+  "price",
+  "quantity",
+  "location",
+  "description",
+  "notes",
+  "producer",
+  "shelf_life",
+  "storage_method",
+  "origin",
+  "unit",
+] as const;
+
+const MULTILINE_KEYS = new Set<string>(["description", "notes"]);
+
+function extractDigits(s: string) {
+  const m = s.match(/(\d{1,8})/);
+  return m ? m[1] : "";
+}
+
+function cleanShort(s: string) {
+  return s
+    .replace(/[.!?。·]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // 영어/기술 용어가 섞인 LLM 메시지를 어르신이 알아보기 쉬운 한국어로 바꿔 보여준다.
 const FRIENDLY_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\blisting_tab\b/gi, "등록 종류"],
+  [/\bhint_tab\b/gi, "선택한 탭"],
+  [/\bproduct\b/gi, "상품"],
+  [/\blodging\b/gi, "숙박"],
+  [/\bexperience\b/gi, "체험"],
   [/\bprice\b/gi, "가격"],
   [/\bnotes?\b/gi, "메모"],
   [/\bdescription\b/gi, "설명"],
@@ -33,6 +68,8 @@ const FRIENDLY_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\btitle\b/gi, "이름"],
   [/\bhighlights?\b/gi, "특장점"],
   [/업데이트/g, "정리"],
+  [/분류함/g, "분류했어요"],
+  [/힌트는/g, "선택은"],
 ];
 
 function humanize(text: string): string {
@@ -54,8 +91,47 @@ export function SellerNoteOcrPanel({ listingTab, onApply }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<OcrListingDraft | null>(null);
   const [previews, setPreviews] = useState<string[]>([]);
-  // 음성 도우미가 "노트 사진으로 채워줘" 의도를 잡으면 이 패널이 잠깐 깜빡인다.
+  const [activeVoiceField, setActiveVoiceField] = useState<string | null>(null);
   const highlighted = useSellerFormVoice((s) => s.highlight === "note_ocr");
+
+  const voiceLockHandlers = useCallback(
+    (key: string) => ({
+      disabled: activeVoiceField !== null && activeVoiceField !== key,
+      onActiveChange: (active: boolean) => setActiveVoiceField(active ? key : null),
+    }),
+    [activeVoiceField]
+  );
+
+  const updateField = useCallback((key: string, value: string) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        fields: {
+          ...prev.fields,
+          [key]: {
+            ...prev.fields[key],
+            value,
+            needs_review: false,
+            confidence: 1,
+          },
+        },
+      };
+    });
+  }, []);
+
+  const visibleFields = draft
+    ? EDITABLE_FIELD_KEYS.filter((key) => {
+        const f = draft.fields?.[key];
+        if (!f) return false;
+        return f.value != null && String(f.value).trim() !== "";
+      })
+    : [];
+
+  const hasReview = visibleFields.some((key) => {
+    const f = draft?.fields?.[key];
+    return f?.needs_review || (f?.confidence ?? 1) < 0.7;
+  });
 
   const onPick = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -162,9 +238,16 @@ export function SellerNoteOcrPanel({ listingTab, onApply }: Props) {
             <p className="font-semibold text-slate-800">
               OCR 결과 · {tabLabel(draft.listing_tab)} 추천
             </p>
-            <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">
-              신뢰도 {Math.round((draft.confidence_overall || 0) * 100)}%
-            </span>
+            <div className="flex items-center gap-2">
+              {draft.ocr_engine?.includes("clova") ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-800 font-semibold">
+                  CLOVA OCR
+                </span>
+              ) : null}
+              <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">
+                신뢰도 {Math.round((draft.confidence_overall || 0) * 100)}%
+              </span>
+            </div>
           </div>
 
           {draft.a2a_steps && draft.a2a_steps.length > 0 && (
@@ -205,9 +288,16 @@ export function SellerNoteOcrPanel({ listingTab, onApply }: Props) {
             </div>
           )}
 
+          {hasReview && (
+            <p className="text-xs text-orange-900 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+              주황색 「확인 필요」 항목은 옆 🎤 로 말해서 고치거나, 칸에 적어 주세요. 고친 뒤
+              「폼에 채우기」를 누르세요.
+            </p>
+          )}
+
           {draft.warnings?.map((w, i) => (
             <p key={i} className="text-xs text-amber-900 bg-amber-50 rounded-lg px-3 py-2">
-              {w}
+              {humanize(String(w))}
             </p>
           ))}
 
@@ -217,10 +307,18 @@ export function SellerNoteOcrPanel({ listingTab, onApply }: Props) {
             </p>
           )}
 
-          <ul className="space-y-2 text-sm">
-            {Object.entries(draft.fields || {}).map(([key, f]) => {
-              if (f?.value == null || f.value === "") return null;
+          <ul className="space-y-3 text-sm">
+            {visibleFields.map((key) => {
+              const f = draft.fields[key];
+              if (!f) return null;
               const review = f.needs_review || (f.confidence ?? 1) < 0.7;
+              const label = FIELD_LABELS[key] ?? key;
+              const strVal = String(f.value ?? "");
+              const voiceHint =
+                key === "price"
+                  ? "가격을 숫자로 말하기"
+                  : `${label} 말로 입력·고치기`;
+
               return (
                 <li
                   key={key}
@@ -230,13 +328,58 @@ export function SellerNoteOcrPanel({ listingTab, onApply }: Props) {
                       : "border-slate-100 bg-slate-50"
                   }`}
                 >
-                  <span className="text-slate-500">{FIELD_LABELS[key] ?? key}</span>
-                  {review && (
-                    <span className="ml-2 text-xs font-semibold text-orange-700">
-                      확인 필요
-                    </span>
-                  )}
-                  <p className="font-medium text-slate-900 mt-0.5">{String(f.value)}</p>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-slate-500 text-xs font-semibold">{label}</span>
+                    {review && (
+                      <span className="text-[10px] font-semibold text-orange-700">
+                        확인 필요
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-start gap-2">
+                    {MULTILINE_KEYS.has(key) ? (
+                      <textarea
+                        className="input-field text-sm flex-1 min-h-[72px] resize-y"
+                        value={strVal}
+                        onChange={(e) => updateField(key, e.target.value)}
+                      />
+                    ) : (
+                      <input
+                        className="input-field text-sm flex-1"
+                        value={strVal}
+                        inputMode={key === "price" ? "numeric" : "text"}
+                        onChange={(e) =>
+                          updateField(
+                            key,
+                            key === "price"
+                              ? e.target.value.replace(/\D/g, "")
+                              : e.target.value
+                          )
+                        }
+                      />
+                    )}
+                    <VoiceFillButton
+                      tone={review ? "amber" : "slate"}
+                      hint={voiceHint}
+                      onInterim={(t) => {
+                        if (key === "price") {
+                          const d = extractDigits(t);
+                          if (d) updateField(key, d);
+                        } else {
+                          updateField(key, t);
+                        }
+                      }}
+                      onText={(t) => {
+                        if (key === "price") {
+                          const d = extractDigits(t);
+                          if (d) updateField(key, d);
+                        } else {
+                          updateField(key, cleanShort(t));
+                        }
+                      }}
+                      {...voiceLockHandlers(`ocr_${key}`)}
+                    />
+                  </div>
                 </li>
               );
             })}

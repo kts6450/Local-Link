@@ -38,7 +38,7 @@ export function SignupPage() {
         seller_sector: role === "seller" ? sellerSector : undefined,
       });
       setSession(r.token, r.user);
-      navigate(role === "seller" ? "/seller/products" : "/", { replace: true });
+      navigate(role === "seller" ? "/seller/dashboard" : "/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "가입에 실패했습니다.");
     } finally {
@@ -54,8 +54,8 @@ export function SignupPage() {
           로컬링크 회원가입
         </h1>
         <p className="mt-5 text-white/85 text-lg leading-relaxed max-w-sm">
-          가입 즉시 이용할 수 있습니다. 공급자는 대표 업종을 정하고, 상품마다
-          카테고리는 따로 고를 수 있어요.
+          구매자는 쇼핑·주문, 공급자는 등록·판매·알림 화면만 이용합니다. 역할마다
+          화면이 다르니 가입 유형을 잘 골라 주세요.
         </p>
       </aside>
 
@@ -131,7 +131,11 @@ export function SignupPage() {
 
           {role === "seller" && (
             <div>
-              <p className="text-sm font-semibold text-hades-text mb-2">대표 업종</p>
+              <p className="text-sm text-amber-900 bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 leading-relaxed">
+                공급자 계정은 <strong>판매 전용</strong>입니다. 동네 특산을 사시려면
+                「구매자」로 따로 가입해 주세요.
+              </p>
+              <p className="text-sm font-semibold text-hades-text mb-2 mt-4">대표 업종</p>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {LISTING_CATEGORIES.map((s) => (
                   <button

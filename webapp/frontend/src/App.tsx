@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { RequireAuth } from "./components/RequireAuth";
+import { RequireConsumer } from "./components/RequireConsumer";
 import { RequireRole } from "./components/RequireRole";
 import { ConsumerLayout } from "./layouts/ConsumerLayout";
 import { SellerLayout } from "./layouts/SellerLayout";
@@ -23,6 +24,7 @@ export default function App() {
       <Route path="/signup" element={<SignupPage />} />
 
       <Route element={<RequireAuth />}>
+      <Route element={<RequireConsumer />}>
       <Route element={<ConsumerLayout />}>
         <Route index element={<ShopPage />} />
         <Route path="listing/:id" element={<ListingDetailPage />} />
@@ -42,6 +44,7 @@ export default function App() {
             </RequireRole>
           }
         />
+      </Route>
       </Route>
 
       <Route path="seller" element={<SellerLayout />}>

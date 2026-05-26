@@ -3,17 +3,16 @@ import { Link } from "react-router-dom";
 
 import { useAuth, useAuthDisplayName, useAuthRole } from "../store/auth";
 import { api } from "../lib/api";
-import type { Order } from "../types";
-
-/** YYYY-MM-DD 문자열을 한국어 날짜로 포맷 */
-function fmtDate(d: string | null | undefined) {
-  if (!d) return null;
-  return new Date(d).toLocaleDateString("ko-KR", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
+import {
+  buyerFlowTypeLabel,
+  buyerFulfillmentBadge,
+  buyerQuantityLabel,
+  buyerReviewCta,
+  buyerReviewTitle,
+  formatOrderSchedule,
+  orderFlowType,
+} from "../lib/orderFlow";
+import type { FulfillmentStatus, Order } from "../types";
 
 interface WrittenReview {
   id: string;
@@ -247,41 +246,18 @@ export function MyPage() {
     );
   };
 
-  const getFulfillmentStatusBadge = (status: string) => {
-    switch (status) {
-      case "pending":
-        return (
-          <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-2 py-0.5">
-            접수 대기
-          </span>
-        );
-      case "preparing":
-        return (
-          <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md px-2 py-0.5">
-            📦 상품 준비 중
-          </span>
-        );
-      case "shipping":
-        return (
-          <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-2 py-0.5 animate-bounce-slow">
-            🚚 배송 중
-          </span>
-        );
-      case "completed":
-        return (
-          <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-2 py-0.5">
-            ✅ 배송/이용 완료
-          </span>
-        );
-      case "cancelled":
-        return (
-          <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-2 py-0.5">
-            ❌ 주문 취소
-          </span>
-        );
-      default:
-        return null;
-    }
+  const getFulfillmentStatusBadge = (order: Order) => {
+    const flow = orderFlowType(order);
+    const badge = buyerFulfillmentBadge(flow, order.fulfillment_status as FulfillmentStatus);
+    const bounce = order.fulfillment_status === "shipping" ? " animate-bounce-slow" : "";
+    return (
+      <span
+        className={`inline-flex items-center gap-1 text-[12px] font-semibold border rounded-md px-2 py-0.5 ${badge.cls}${bounce}`}
+      >
+        {badge.emoji ? `${badge.emoji} ` : ""}
+        {badge.label}
+      </span>
+    );
   };
 
   return (
@@ -386,7 +362,7 @@ export function MyPage() {
                     : "text-hades-muted hover:bg-brand-warm hover:text-brand-ink"
                 }`}
               >
-                <span>✅ 배송/이용 완료</span>
+                <span>✅ 이용 완료</span>
                 <span className="text-xs bg-black/10 rounded-full px-2 py-0.5 tabular-nums">
                   {orders.filter((o) => o.fulfillment_status === "completed").length}
                 </span>
@@ -654,7 +630,10 @@ export function MyPage() {
                 </div>
               ) : (
                 <ul className="space-y-6">
-                  {filteredOrders.map((order) => (
+                  {filteredOrders.map((order) => {
+                    const flow = orderFlowType(order);
+                    const schedule = formatOrderSchedule(order, flow);
+                    return (
                     <li
                       key={order.id}
                       className="card-hover bg-white p-6 sm:p-7 relative overflow-hidden"
@@ -666,7 +645,10 @@ export function MyPage() {
                             <span className="text-[13px] font-bold text-hades-muted/70 tracking-wider font-mono">
                               주문번호: {order.id}
                             </span>
-                            {getFulfillmentStatusBadge(order.fulfillment_status)}
+                            <span className="text-[11px] font-bold text-shop-tealDark bg-shop-tealLight/60 border border-shop-teal/20 rounded-full px-2.5 py-0.5">
+                              {buyerFlowTypeLabel(flow)}
+                            </span>
+                            {getFulfillmentStatusBadge(order)}
                           </div>
                           <h3 className="text-[15px] font-bold text-hades-muted mt-1">
                             주문 일자: {new Date(order.created_at).toLocaleString("ko-KR", {
@@ -677,12 +659,11 @@ export function MyPage() {
                               minute: "2-digit",
                             })}
                           </h3>
-                          {/* 숙박 날짜 표시 */}
-                          {order.stay_start && order.stay_end && (
+                          {schedule ? (
                             <p className="mt-1.5 inline-flex items-center gap-1.5 text-[13px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200/80 rounded-full px-3 py-1">
-                              🏨 숙박 기간: {fmtDate(order.stay_start)} ~ {fmtDate(order.stay_end)}
+                              {schedule}
                             </p>
-                          )}
+                          ) : null}
                         </div>
                         <div className="flex items-center gap-3">
                           {getPaymentStatusBadge(order.payment_status)}
@@ -710,7 +691,7 @@ export function MyPage() {
                                     {item.title}
                                   </Link>
                                   <div className="flex items-center gap-4 mt-1.5 text-sm font-semibold text-hades-muted">
-                                    <span>수량: {item.quantity}개</span>
+                                    <span>수량: {buyerQuantityLabel(flow, item.quantity)}</span>
                                     <span>·</span>
                                     <span>단가: {item.unit_price.toLocaleString("ko-KR")}원</span>
                                   </div>
@@ -739,13 +720,13 @@ export function MyPage() {
                                       onClick={() => openReviewForm(order.id, item.listing_id)}
                                       className="self-start text-xs font-bold text-brand-ink hover:underline flex items-center gap-1"
                                     >
-                                      ⭐ 상품 리뷰 작성하기
+                                      ⭐ {buyerReviewCta(flow)}
                                     </button>
                                   ) : (
                                     <div className="bg-white rounded-xl p-4 border border-brand-line/70 shadow-sm animate-assistantPop space-y-3">
                                       <div className="flex items-center justify-between">
                                         <h4 className="text-[13px] font-extrabold text-brand-ink">
-                                          상품 만족도 별점
+                                          {buyerReviewTitle(flow)}
                                         </h4>
                                         {/* 별점 컴포넌트 */}
                                         <div className="flex items-center gap-1">
@@ -838,7 +819,8 @@ export function MyPage() {
                         )}
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
             </>

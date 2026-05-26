@@ -274,11 +274,38 @@ def _image_provider() -> str:
     return "openai" if is_openai_configured() else "pollinations"
 
 
+_OPENAI_IMAGE_FALLBACKS = (
+    "gpt-image-1.5",
+    "gpt-image-1",
+    "gpt-image-1-mini",
+    "dall-e-3",
+    "dall-e-2",
+)
+
+
 def _openai_image_models() -> list[str]:
     explicit = (os.environ.get("OPENAI_IMAGE_MODEL") or "").strip()
-    if explicit:
-        return [explicit]
-    return ["dall-e-3", "dall-e-2"]
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for model in ([explicit] if explicit else []) + list(_OPENAI_IMAGE_FALLBACKS):
+        if model and model not in seen:
+            ordered.append(model)
+            seen.add(model)
+    return ordered or list(_OPENAI_IMAGE_FALLBACKS)
+
+
+def _openai_image_kwargs(model: str, prompt: str) -> dict:
+    kwargs: dict = {
+        "model": model,
+        "prompt": prompt,
+        "n": 1,
+        "size": "1024x1024",
+    }
+    if model.startswith("dall-e"):
+        kwargs["response_format"] = "b64_json"
+    if model.startswith("dall-e-3"):
+        kwargs["quality"] = (os.environ.get("OPENAI_IMAGE_QUALITY") or "standard").strip()
+    return kwargs
 
 
 def _openai_image(prompt: str) -> bytes:
@@ -297,19 +324,17 @@ def _openai_image(prompt: str) -> bytes:
         for i in range(len(openai_keys())):
             try:
                 client = openai_client(key_index=i)
-                kwargs: dict = {
-                    "model": model,
-                    "prompt": prompt,
-                    "n": 1,
-                    "size": "1024x1024",
-                    "response_format": "b64_json",
-                }
-                if model.startswith("dall-e-3"):
-                    kwargs["quality"] = (
-                        os.environ.get("OPENAI_IMAGE_QUALITY") or "standard"
-                    ).strip()
-                resp = client.images.generate(**kwargs)
-                b64 = resp.data[0].b64_json
+                resp = client.images.generate(**_openai_image_kwargs(model, prompt))
+                item = resp.data[0]
+                b64 = item.b64_json
+                if not b64 and item.url:
+                    with httpx.Client(timeout=120.0, follow_redirects=True) as http:
+                        img_res = http.get(item.url)
+                        img_res.raise_for_status()
+                        data = img_res.content
+                    if len(data) < 1024:
+                        raise RuntimeError("이미지 데이터가 너무 작습니다.")
+                    return data
                 if not b64:
                     raise RuntimeError("OpenAI 이미지 응답이 비어 있습니다.")
                 data = base64.b64decode(b64)
@@ -374,7 +399,15 @@ def generate_listing_cover_png(
 
     provider = _image_provider()
     if provider == "openai":
-        data = _openai_image(prompt)
+        try:
+            data = _openai_image(prompt)
+        except Exception as exc:
+            import logging
+
+            logging.getLogger("listing_ai").warning(
+                "OpenAI 이미지 실패, Pollinations 폴백: %s", exc
+            )
+            data = _pollinations_image(prompt)
     else:
         data = _pollinations_image(prompt)
     return data, prompt

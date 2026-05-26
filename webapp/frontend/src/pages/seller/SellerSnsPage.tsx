@@ -1,17 +1,24 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { PageHeader } from "../../components/ui/PageHeader";
 import { api } from "../../lib/api";
+import { useAuthSellerId } from "../../store/auth";
 import type { Listing } from "../../types";
 
 /** SNS는 쇼핑몰에 안 붙고, 공급자가 인스타·페이스북에 직접 올리는 용도 */
 export function SellerSnsPage() {
+  const sellerId = useAuthSellerId();
   const [listings, setListings] = useState<Listing[]>([]);
   const [pickId, setPickId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Record<string, unknown> | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const myListings = useMemo(
+    () => (sellerId ? listings.filter((l) => l.seller_id === sellerId) : listings),
+    [listings, sellerId]
+  );
 
   const reload = useCallback(
     () => api.getListings().then(setListings).catch(() => setListings([])),
@@ -23,10 +30,16 @@ export function SellerSnsPage() {
   }, [reload]);
 
   useEffect(() => {
-    if (listings[0] && !pickId) setPickId(listings[0].id);
-  }, [listings, pickId]);
+    if (myListings.length === 0) {
+      setPickId("");
+      return;
+    }
+    if (!pickId || !myListings.some((l) => l.id === pickId)) {
+      setPickId(myListings[0].id);
+    }
+  }, [myListings, pickId]);
 
-  const picked = listings.find((l) => l.id === pickId);
+  const picked = myListings.find((l) => l.id === pickId);
 
   const instagramText = draft
     ? [String(draft.instagram ?? ""), String(draft.hashtags ?? "")].filter(Boolean).join("\n\n")
@@ -81,7 +94,7 @@ export function SellerSnsPage() {
         <li>쇼핑몰 링크는 프로필·댓글에 안내하면 됩니다.</li>
       </ol>
 
-      {listings.length === 0 ? (
+      {myListings.length === 0 ? (
         <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-4">
           등록된 상품이 없습니다. «상품 등록» 메뉴에서 먼저 올려 주세요.
         </p>
@@ -94,7 +107,7 @@ export function SellerSnsPage() {
               value={pickId}
               onChange={(e) => setPickId(e.target.value)}
             >
-              {listings.map((l) => (
+              {myListings.map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.emoji} {l.title} — {l.price.toLocaleString()}원
                 </option>

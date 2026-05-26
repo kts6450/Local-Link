@@ -180,7 +180,14 @@ export function useVoiceSession() {
               price: Math.round(price),
               location,
               emoji: merged.emoji ? String(merged.emoji) : undefined,
-              stock: kind === "product" ? (merged.stock != null ? Number(merged.stock) : 99) : null,
+              stock:
+                kind === "product"
+                  ? merged.stock != null
+                    ? Number(merged.stock)
+                    : category === "experience"
+                      ? 20
+                      : 99
+                  : null,
               max_guests:
                 kind === "lodging"
                   ? merged.max_guests != null

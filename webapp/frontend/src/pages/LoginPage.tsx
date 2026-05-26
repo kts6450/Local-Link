@@ -24,7 +24,7 @@ export function LoginPage() {
 
   const afterLogin = (role: string) => {
     if (role === "master" || role === "seller") {
-      navigate("/seller/products", { replace: true });
+      navigate("/seller/dashboard", { replace: true });
     } else {
       navigate("/", { replace: true });
     }
@@ -62,7 +62,7 @@ export function LoginPage() {
         <h2 className="text-2xl font-bold text-hades-text">로그인</h2>
         <p className="mt-2 text-hades-muted">
           {roleHint === "seller"
-            ? "공급자 계정으로 셀러오피스에 들어갑니다."
+            ? "공급자 계정은 판매·주문 관리 전용입니다. 쇼핑·구매는 구매자 계정으로 따로 가입해 주세요."
             : "구매자 계정으로 쇼핑몰에 들어갑니다."}
         </p>
 

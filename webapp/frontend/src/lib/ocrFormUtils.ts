@@ -139,25 +139,14 @@ export function buildOcrImagePrompt(
   titleFallback = ""
 ): string {
   const title = String(fields?.title?.value ?? titleFallback).trim();
-  const loc = cleanOcrLocation(String(fields?.location?.value ?? ""));
-  const qty = String(fields?.quantity?.value ?? "").trim();
-  const desc = String(fields?.description?.value ?? fields?.notes?.value ?? "").trim();
-
-  const parts: string[] = [];
-  if (title) parts.push(title);
-  if (loc) parts.push(loc);
-  if (qty) parts.push(qty);
-
+  if (!title) return "";
   if (tab === "experience") {
-    return `${parts.join(" ")} 체험 장면, 참여하는 모습, 밝은 자연광`.trim();
+    return `${title} 체험`;
   }
   if (tab === "lodging") {
-    return `${parts.join(" ")} 아늑한 민박·숙소 외관, 따뜻한 분위기`.trim();
+    return `${title} 숙소`;
   }
-  if (desc.slice(0, 40)) {
-    return `${parts.join(" ")} — ${desc.slice(0, 60)}, 산지 특산품 포장 사진`.trim();
-  }
-  return `${parts.join(" ")} 산지 특산품, 정갈한 포장, 자연광 상품 촬영`.trim();
+  return title;
 }
 
 export function buildImagePromptFromListing(

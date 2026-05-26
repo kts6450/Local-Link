@@ -71,8 +71,9 @@ def primary_openai_key() -> str:
     return keys[0] if keys else ""
 
 
-def openai_base_url() -> str:
-    return (os.environ.get("OPENAI_BASE_URL") or "").strip()
+def openai_base_url() -> str | None:
+    raw = (os.environ.get("OPENAI_BASE_URL") or "").strip()
+    return raw or None
 
 
 def is_openai_configured() -> bool:
@@ -150,6 +151,9 @@ def openai_client(*, key_index: int = 0):
     if not keys:
         raise RuntimeError("OPENAI_API_KEY missing")
     idx = min(max(0, key_index), len(keys) - 1)
+    # SDK 가 process env 의 빈 OPENAI_BASE_URL 을 읽으면 Connection error
+    if not (os.environ.get("OPENAI_BASE_URL") or "").strip():
+        os.environ.pop("OPENAI_BASE_URL", None)
     kwargs: dict[str, Any] = {"api_key": keys[idx], "max_retries": 3, "timeout": 120.0}
     base = openai_base_url()
     if base:

@@ -2,11 +2,15 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../../components/ui/PageHeader";
-import { ListingGuidePreview } from "../../components/seller/ListingGuidePreview";
+import { ListingGuideEditor } from "../../components/seller/ListingGuideEditor";
 import { SellerNoteOcrPanel } from "../../components/seller/SellerNoteOcrPanel";
 import { SellerStepIndicator } from "../../components/seller/SellerStepIndicator";
 import { SellerVoicePanel } from "../../components/seller/SellerVoicePanel";
 import { api } from "../../lib/api";
+import {
+  detailFieldsForTab,
+  detailSectionMeta,
+} from "../../lib/listingDetailFields";
 import {
   LISTING_TABS,
   PRODUCT_MENU_CATEGORIES,
@@ -18,7 +22,6 @@ import {
   type OcrListingDraft,
 } from "../../lib/listingTabs";
 import {
-  buildImagePromptFromListing,
   buildOcrImagePrompt,
   cleanOcrLocation,
   parseOcrPrice,
@@ -96,10 +99,11 @@ export function SellerProductsPage() {
   const [maxGuests, setMaxGuests] = useState("4");
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiStage, setAiStage] = useState<"idle" | "composing" | "drawing">("idle");
   const [coverDataUrl, setCoverDataUrl] = useState<string | null>(null);
   const [extraPhotos, setExtraPhotos] = useState<string[]>([]);
   const [imagePromptKo, setImagePromptKo] = useState("");
-  const [imagePromptEn, setImagePromptEn] = useState("");
+  const imagePromptEnRef = useRef("");
   const [promptSummary, setPromptSummary] = useState<string | null>(null);
   const [aiHint, setAiHint] = useState<string | null>(null);
   const [ocrPriceDetail, setOcrPriceDetail] = useState<string | null>(null);
@@ -150,7 +154,7 @@ export function SellerProductsPage() {
     setGuide(null);
     setCoverDataUrl(null);
     setImagePromptKo("");
-    setImagePromptEn("");
+    imagePromptEnRef.current = "";
     setPromptSummary(null);
     setAiHint(null);
     setOcrPriceDetail(null);
@@ -309,40 +313,40 @@ export function SellerProductsPage() {
     }
   }, [kind, title, price, location]);
 
-  const generateCoverAi = useCallback(async () => {
+  const runCoverAi = useCallback(async (regenerate = false) => {
     const t = title.trim();
     if (!t) {
       setAiHint("먼저 1단계에서 이름을 적어 주세요.");
       setStep(1);
       return;
     }
-    // 버튼 클릭 + 음성 명령 동시에 들어올 경우 중복 실행 방지
     if (aiImageRunningRef.current) return;
     aiImageRunningRef.current = true;
     setAiBusy(true);
+    setAiStage("composing");
     setAiHint(null);
     try {
       const { kind: k, category: cat } = resolveKindCategory(listingTab, category);
-      let koHint = imagePromptKo.trim();
-      if (!koHint) {
-        koHint = buildImagePromptFromListing(t, location.trim(), description.trim(), listingTab);
-        setImagePromptKo(koHint);
+      const koHint = (imagePromptKo.trim() || t).slice(0, 200);
+      if (!imagePromptKo.trim()) setImagePromptKo(koHint);
+      if (regenerate) {
+        imagePromptEnRef.current = "";
       }
-      let promptEn = imagePromptEn.trim();
-      if (!promptEn) {
-        const enhanced = await api.enhanceImagePrompt({
-          kind: k,
-          title: t,
-          location: location.trim(),
-          category: cat,
-          description: description.trim(),
-          user_hint: koHint,
-        });
-        promptEn = enhanced.prompt_en;
-        setImagePromptEn(promptEn);
-        setPromptSummary(enhanced.summary_ko);
-      }
-      // 매 호출 고유 토큰을 붙여 Pollinations 캐시 hit 을 차단 (백엔드 seed 와 이중 보험)
+      const regenNote = regenerate
+        ? " 다른 구도·배경·소품으로, 이전과 다르게."
+        : "";
+      const enhanced = await api.enhanceImagePrompt({
+        kind: k,
+        title: t,
+        location: location.trim(),
+        category: cat,
+        description: description.trim(),
+        user_hint: `${koHint}${regenNote}`,
+      });
+      imagePromptEnRef.current = enhanced.prompt_en;
+      setPromptSummary(enhanced.summary_ko);
+
+      setAiStage("drawing");
       const variantTag = `__variant_${Date.now()}_${Math.random()
         .toString(36)
         .slice(2, 8)}`;
@@ -352,11 +356,15 @@ export function SellerProductsPage() {
         location: location.trim(),
         category: cat,
         description: description.trim(),
-        prompt_en: `${promptEn} ${variantTag}`,
+        prompt_en: `${enhanced.prompt_en} ${variantTag}`,
       });
       setCoverDataUrl(`data:${r.mime_type};base64,${r.image_base64}`);
       setStep(3);
-      setAiHint("대표 사진을 만들었어요.");
+      setAiHint(
+        regenerate
+          ? "다른 문구로 사진을 다시 만들었어요."
+          : "대표 사진을 만들었어요."
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : "사진을 만들지 못했어요.";
       setAiHint(
@@ -365,17 +373,14 @@ export function SellerProductsPage() {
       );
     } finally {
       setAiBusy(false);
+      setAiStage("idle");
+      setPromptSummary(null);
       aiImageRunningRef.current = false;
     }
-  }, [
-    listingTab,
-    category,
-    title,
-    location,
-    description,
-    imagePromptEn,
-    imagePromptKo,
-  ]);
+  }, [listingTab, category, title, location, description, imagePromptKo]);
+
+  /** 음성·레거시 호출용 */
+  const generateCoverAi = useCallback(() => runCoverAi(false), [runCoverAi]);
 
   const voiceAiWrite = useCallback(async () => {
     const hist = useConversation.getState().history;
@@ -433,8 +438,22 @@ export function SellerProductsPage() {
   }, [sellerSector]);
 
   useEffect(() => {
-    if (slots.kind === "product" || slots.kind === "lodging") {
-      selectListingTab(slots.kind === "lodging" ? "lodging" : "product");
+    const cat = String(slots.category || "").trim();
+    if (slots.kind === "lodging") {
+      if (listingTab !== "lodging") {
+        setListingTab("lodging");
+        setCategory("lodging");
+      }
+    } else if (cat === "experience") {
+      if (listingTab !== "experience") {
+        setListingTab("experience");
+        setCategory("experience");
+      }
+    } else if (slots.kind === "product" && listingTab !== "product") {
+      setListingTab("product");
+      if (cat && cat !== "experience" && cat !== "lodging") {
+        setCategory(cat as ListingCategory);
+      }
     }
     if (typeof slots.title === "string" && slots.title.trim()) setTitle(slots.title.trim());
     if (typeof slots.price === "number" && slots.price >= 0) setPrice(String(slots.price));
@@ -450,7 +469,7 @@ export function SellerProductsPage() {
     if (slots.kind === "lodging" && typeof slots.max_guests === "number") {
       setMaxGuests(String(slots.max_guests));
     }
-  }, [slots, selectListingTab]);
+  }, [slots, listingTab]);
 
   // 수정 모드: ?edit=<id> 면 기존 상품 내용을 폼에 채운다.
   useEffect(() => {
@@ -495,9 +514,17 @@ export function SellerProductsPage() {
 
   // 대표 이미지 생성은 외부 키 없이도 동작하므로 별도 가드는 두지 않는다.
 
-  // 제목이나 한국어 힌트가 바뀌면 영문 프롬프트 캐시를 초기화해서 항상 최신 힌트가 반영되게 한다.
+  // 3단계 진입 시 장면 힌트는 기본적으로 상품 이름만
   useEffect(() => {
-    setImagePromptEn("");
+    if (step !== 3) return;
+    const t = title.trim();
+    if (!t) return;
+    setImagePromptKo((prev) => (prev.trim() ? prev : t));
+  }, [step, title]);
+
+  // 제목·한국어 힌트가 바뀌면 내부 영문 프롬프트만 초기화 (화면에는 노출하지 않음)
+  useEffect(() => {
+    imagePromptEnRef.current = "";
     setPromptSummary(null);
   }, [title, imagePromptKo]);
 
@@ -556,18 +583,21 @@ export function SellerProductsPage() {
         description: description.trim(),
         price: Math.max(0, parseInt(price, 10) || 0),
         location: location.trim(),
-        stock: k === "product" ? Math.max(0, parseInt(stock, 10) || 0) : null,
+        stock:
+          k === "product"
+            ? Math.max(0, parseInt(stock, 10) || 0)
+            : null,
         max_guests:
           k === "lodging" ? Math.max(1, parseInt(maxGuests, 10) || 4) : null,
         cover_image_base64: coverIsNew ? coverDataUrl!.split(",", 2)[1] : undefined,
         guide: guide ?? undefined,
         variants:
-          k === "product" && variants && variants.length >= 2 ? variants : undefined,
-        details:
-          k === "product" &&
-          Object.values(details).some((v) => v && String(v).trim())
-            ? details
+          k === "product" && cat !== "experience" && variants && variants.length >= 2
+            ? variants
             : undefined,
+        details: Object.values(details).some((v) => v && String(v).trim())
+          ? details
+          : undefined,
       };
       const saved = editId
         ? await api.updateListing(editId, payload)
@@ -588,7 +618,7 @@ export function SellerProductsPage() {
       setCoverDataUrl(null);
       setExtraPhotos([]);
       setImagePromptKo("");
-      setImagePromptEn("");
+      imagePromptEnRef.current = "";
       setPromptSummary(null);
       setAiHint(null);
       setOcrPriceDetail(null);
@@ -611,7 +641,7 @@ export function SellerProductsPage() {
   const banner = STEP_BANNERS[step] ?? STEP_BANNERS[1];
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 pb-44 sm:pb-48">
       {listingSubmitted && (
         <div className="rounded-2xl border border-shop-teal/30 bg-shop-tealLight/60 p-5 flex flex-wrap items-center justify-between gap-3">
           <p className="font-semibold text-shop-tealDark">
@@ -661,16 +691,12 @@ export function SellerProductsPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-[1fr_1fr_2fr] gap-0 xl:gap-6">
-          <div className="border-b xl:border-b-0 xl:border-r border-slate-100 p-5 sm:p-6 bg-slate-50/50 xl:sticky xl:top-24 xl:self-start xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
+        <div className="grid grid-cols-1 lg:grid-cols-2 lg:divide-x divide-slate-100 min-h-[calc(100vh-14rem)]">
+          <div className="p-5 sm:p-6 bg-slate-50/50 lg:overflow-y-auto lg:max-h-[calc(100vh-14rem)]">
             <SellerNoteOcrPanel listingTab={listingTab} onApply={applyOcrDraft} />
           </div>
 
-          <div className="border-b xl:border-b-0 xl:border-r border-slate-100 p-5 sm:p-6 bg-slate-50/50 xl:sticky xl:top-24 xl:self-start xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
-            <SellerVoicePanel step={step} listingTab={listingTab} />
-          </div>
-
-          <div className="p-5 sm:p-8">
+          <div className="p-5 sm:p-8 lg:overflow-y-auto lg:max-h-[calc(100vh-14rem)]">
             {aiHint && (
               <p className="mb-4 text-sm text-amber-900 bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
                 {aiHint}
@@ -741,15 +767,14 @@ export function SellerProductsPage() {
                         required
                         placeholder="예: 올해 햅쌀 10kg"
                       />
-                      {!title.trim() ? (
-                        <VoiceFillButton
-                          tone="emerald"
-                          size="lg"
-                          hint="상품 이름을 말로 채우기"
-                          onText={(t) => setTitle(cleanShort(t))}
-                          {...voiceLockHandlers("title")}
-                        />
-                      ) : null}
+                      <VoiceFillButton
+                        tone="emerald"
+                        size="lg"
+                        hint="상품 이름을 말로 입력·고치기"
+                        onInterim={(t) => setTitle(cleanShort(t))}
+                        onText={(t) => setTitle(cleanShort(t))}
+                        {...voiceLockHandlers("title")}
+                      />
                     </div>
                   </div>
                   <div>
@@ -763,25 +788,27 @@ export function SellerProductsPage() {
                         required
                         placeholder="42000"
                       />
-                      {!price.trim() ? (
-                        <VoiceFillButton
-                          tone="emerald"
-                          size="lg"
-                          hint="가격을 숫자로 말로 채우기"
-                          onText={(t) => {
-                            const d = extractDigits(t);
-                            if (d) setPrice(d);
-                          }}
-                          {...voiceLockHandlers("price")}
-                        />
-                      ) : null}
+                      <VoiceFillButton
+                        tone="emerald"
+                        size="lg"
+                        hint="가격을 숫자로 말로 입력·고치기"
+                        onInterim={(t) => {
+                          const d = extractDigits(t);
+                          if (d) setPrice(d);
+                        }}
+                        onText={(t) => {
+                          const d = extractDigits(t);
+                          if (d) setPrice(d);
+                        }}
+                        {...voiceLockHandlers("price")}
+                      />
                     </div>
                     {ocrPriceDetail && !variants ? (
                       <p className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
                         메모에 여러 단가가 있습니다. 대표 가격만 넣었어요 — 전체: {ocrPriceDetail}
                       </p>
                     ) : null}
-                    {variants && variants.length >= 2 && listingTab !== "lodging" ? (
+                    {variants && variants.length >= 2 && listingTab === "product" ? (
                       <div className="mt-3 rounded-2xl border-2 border-emerald-200 bg-emerald-50/70 p-4">
                         <div className="flex items-start gap-2 mb-3">
                           <span className="text-2xl leading-none">🧺</span>
@@ -877,46 +904,17 @@ export function SellerProductsPage() {
                         onChange={(e) => setLocation(e.target.value)}
                         placeholder="전북 김제시"
                       />
-                      {!location.trim() ? (
-                        <VoiceFillButton
-                          tone="emerald"
-                          size="lg"
-                          hint="시·군을 말로 채우기"
-                          onText={(t) => setLocation(cleanShort(t))}
-                          {...voiceLockHandlers("location")}
-                        />
-                      ) : null}
+                      <VoiceFillButton
+                        tone="emerald"
+                        size="lg"
+                        hint="시·군을 말로 입력·고치기"
+                        onInterim={(t) => setLocation(cleanShort(t))}
+                        onText={(t) => setLocation(cleanShort(t))}
+                        {...voiceLockHandlers("location")}
+                      />
                     </div>
                   </div>
-                  {listingTab !== "lodging" ? (
-                    <div>
-                      <label className="label-step">재고 수량</label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          className="input-field text-lg flex-1"
-                          inputMode="numeric"
-                          value={stock}
-                          onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))}
-                          placeholder="10"
-                        />
-                        {!stock.trim() ? (
-                          <VoiceFillButton
-                            tone="emerald"
-                            size="lg"
-                            hint="재고 수량을 숫자로 말로 채우기"
-                            onText={(t) => {
-                              const d = extractDigits(t);
-                              if (d) setStock(d);
-                            }}
-                            {...voiceLockHandlers("stock")}
-                          />
-                        ) : null}
-                      </div>
-                      <p className="mt-1 text-xs text-slate-500">
-                        지금 팔 수 있는 개수예요. 옵션이 있으면 옵션마다 따로 관리됩니다.
-                      </p>
-                    </div>
-                  ) : (
+                  {listingTab === "lodging" ? (
                     <div>
                       <label className="label-step">정원 (명)</label>
                       <div className="flex items-center gap-2">
@@ -927,200 +925,173 @@ export function SellerProductsPage() {
                           onChange={(e) => setMaxGuests(e.target.value.replace(/\D/g, ""))}
                           placeholder="4"
                         />
-                        {!maxGuests.trim() ? (
-                          <VoiceFillButton
-                            tone="emerald"
-                            size="lg"
-                            hint="정원을 숫자로 말로 채우기"
-                            onText={(t) => {
-                              const d = extractDigits(t);
-                              if (d) setMaxGuests(d);
-                            }}
-                            {...voiceLockHandlers("max_guests")}
-                          />
-                        ) : null}
+                        <VoiceFillButton
+                          tone="emerald"
+                          size="lg"
+                          hint="정원을 숫자로 말로 입력·고치기"
+                          onInterim={(t) => {
+                            const d = extractDigits(t);
+                            if (d) setMaxGuests(d);
+                          }}
+                          onText={(t) => {
+                            const d = extractDigits(t);
+                            if (d) setMaxGuests(d);
+                          }}
+                          {...voiceLockHandlers("max_guests")}
+                        />
                       </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        한 번에 받을 수 있는 최대 인원이에요.
+                      </p>
+                    </div>
+                  ) : listingTab === "experience" ? (
+                    <div>
+                      <label className="label-step">하루 정원 (명)</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          className="input-field text-lg flex-1"
+                          inputMode="numeric"
+                          value={stock}
+                          onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))}
+                          placeholder="20"
+                        />
+                        <VoiceFillButton
+                          tone="emerald"
+                          size="lg"
+                          hint="하루 정원을 숫자로 말로 입력·고치기"
+                          onInterim={(t) => {
+                            const d = extractDigits(t);
+                            if (d) setStock(d);
+                          }}
+                          onText={(t) => {
+                            const d = extractDigits(t);
+                            if (d) setStock(d);
+                          }}
+                          {...voiceLockHandlers("stock")}
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        하루(또는 회차)에 받을 수 있는 최대 인원이에요. 음성으로 「24명」처럼
+                        말씀하셔도 됩니다.
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="label-step">재고 수량</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          className="input-field text-lg flex-1"
+                          inputMode="numeric"
+                          value={stock}
+                          onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))}
+                          placeholder="10"
+                        />
+                        <VoiceFillButton
+                          tone="emerald"
+                          size="lg"
+                          hint="재고 수량을 숫자로 말로 입력·고치기"
+                          onInterim={(t) => {
+                            const d = extractDigits(t);
+                            if (d) setStock(d);
+                          }}
+                          onText={(t) => {
+                            const d = extractDigits(t);
+                            if (d) setStock(d);
+                          }}
+                          {...voiceLockHandlers("stock")}
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        지금 팔 수 있는 개수예요. 옵션이 있으면 옵션마다 따로 관리됩니다.
+                      </p>
                     </div>
                   )}
 
-                  {listingTab !== "lodging" ? (
-                    <div className="rounded-2xl border border-slate-200 bg-white">
-                      <button
-                        type="button"
-                        onClick={() => setDetailsOpen((v) => !v)}
-                        className="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-slate-50 rounded-2xl"
-                      >
-                        <span className="flex items-center gap-2">
-                          <span className="text-xl">📦</span>
-                          <span className="font-semibold text-slate-800">상세 정보</span>
-                          <span className="text-xs text-slate-500">
-                            (선택 — 적으면 구매하는 분이 더 잘 알아봐요)
-                          </span>
-                          {Object.values(details).filter((v) => v && String(v).trim())
-                            .length > 0 ? (
-                            <span className="ml-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold">
-                              {
-                                Object.values(details).filter(
-                                  (v) => v && String(v).trim()
-                                ).length
-                              }
-                              개 채움
-                            </span>
-                          ) : null}
-                        </span>
-                        <span
-                          className={`text-slate-400 transition-transform ${
-                            detailsOpen ? "rotate-180" : ""
-                          }`}
+                  {(() => {
+                    const meta = detailSectionMeta(listingTab);
+                    const fields = detailFieldsForTab(listingTab);
+                    const filledCount = Object.values(details).filter(
+                      (v) => v && String(v).trim()
+                    ).length;
+                    return (
+                      <div className="rounded-2xl border border-slate-200 bg-white">
+                        <button
+                          type="button"
+                          onClick={() => setDetailsOpen((v) => !v)}
+                          className="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-slate-50 rounded-2xl"
                         >
-                          ▾
-                        </span>
-                      </button>
-                      {detailsOpen ? (
-                        <div className="px-4 pb-5 pt-1 space-y-4 border-t border-slate-100">
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div>
-                              <label className="text-sm font-semibold text-slate-700 block mb-1">
-                                단위
-                              </label>
-                              <div className="flex items-center gap-2">
-                                <input
-                                  className="input-field flex-1"
-                                  value={details.unit ?? ""}
-                                  onChange={(e) =>
-                                    setDetails((d) => ({ ...d, unit: e.target.value }))
-                                  }
-                                  placeholder="kg / 개 / 박스 / 묶음"
-                                />
-                                {!(details.unit ?? "").trim() ? (
-                                  <VoiceFillButton
-                                    tone="emerald"
-                                    hint="단위를 말로 채우기 (예: 1킬로, 한 봉지)"
-                                    onText={(t) =>
-                                      setDetails((d) => ({ ...d, unit: cleanShort(t) }))
-                                    }
-                                    {...voiceLockHandlers("unit")}
-                                  />
-                                ) : null}
-                              </div>
-                              <p className="text-[11px] text-slate-500 mt-0.5">
-                                옵션이 없으면 1개를 어떻게 파는지 적어 주세요.
-                              </p>
-                            </div>
-                            <div>
-                              <label className="text-sm font-semibold text-slate-700 block mb-1">
-                                원산지·생산지
-                              </label>
-                              <div className="flex items-center gap-2">
-                                <input
-                                  className="input-field flex-1"
-                                  value={details.origin ?? ""}
-                                  onChange={(e) =>
-                                    setDetails((d) => ({ ...d, origin: e.target.value }))
-                                  }
-                                  placeholder="경상북도 포항시 북구 기계면"
-                                />
-                                {!(details.origin ?? "").trim() ? (
-                                  <VoiceFillButton
-                                    tone="emerald"
-                                    hint="원산지를 말로 채우기"
-                                    onText={(t) =>
-                                      setDetails((d) => ({ ...d, origin: cleanShort(t) }))
-                                    }
-                                    {...voiceLockHandlers("origin")}
-                                  />
-                                ) : null}
-                              </div>
-                              <p className="text-[11px] text-slate-500 mt-0.5">
-                                동네보다 더 자세하게 — 농가가 있는 곳까지.
-                              </p>
-                            </div>
-                            <div>
-                              <label className="text-sm font-semibold text-slate-700 block mb-1">
-                                생산자·농가명
-                              </label>
-                              <div className="flex items-center gap-2">
-                                <input
-                                  className="input-field flex-1"
-                                  value={details.producer ?? ""}
-                                  onChange={(e) =>
-                                    setDetails((d) => ({ ...d, producer: e.target.value }))
-                                  }
-                                  placeholder="기계 햇살 농원"
-                                />
-                                {!(details.producer ?? "").trim() ? (
-                                  <VoiceFillButton
-                                    tone="emerald"
-                                    hint="농가·생산자 이름을 말로 채우기"
-                                    onText={(t) =>
-                                      setDetails((d) => ({ ...d, producer: cleanShort(t) }))
-                                    }
-                                    {...voiceLockHandlers("producer")}
-                                  />
-                                ) : null}
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-sm font-semibold text-slate-700 block mb-1">
-                                유통기한
-                              </label>
-                              <div className="flex items-center gap-2">
-                                <input
-                                  className="input-field flex-1"
-                                  value={details.shelf_life ?? ""}
-                                  onChange={(e) =>
-                                    setDetails((d) => ({ ...d, shelf_life: e.target.value }))
-                                  }
-                                  placeholder="냉장 7일 / 1년"
-                                />
-                                {!(details.shelf_life ?? "").trim() ? (
-                                  <VoiceFillButton
-                                    tone="emerald"
-                                    hint="유통기한을 말로 채우기"
-                                    onText={(t) =>
-                                      setDetails((d) => ({ ...d, shelf_life: cleanShort(t) }))
-                                    }
-                                    {...voiceLockHandlers("shelf_life")}
-                                  />
-                                ) : null}
-                              </div>
-                            </div>
-                            <div className="sm:col-span-2">
-                              <label className="text-sm font-semibold text-slate-700 block mb-1">
-                                보관 방법
-                              </label>
-                              <div className="flex items-center gap-2">
-                                <input
-                                  className="input-field flex-1"
-                                  value={details.storage_method ?? ""}
-                                  onChange={(e) =>
-                                    setDetails((d) => ({
-                                      ...d,
-                                      storage_method: e.target.value,
-                                    }))
-                                  }
-                                  placeholder="서늘하고 통풍 잘 되는 곳 (실온/냉장/냉동)"
-                                />
-                                {!(details.storage_method ?? "").trim() ? (
-                                  <VoiceFillButton
-                                    tone="emerald"
-                                    hint="보관 방법을 말로 채우기"
-                                    onText={(t) =>
-                                      setDetails((d) => ({
-                                        ...d,
-                                        storage_method: cleanShort(t),
-                                      }))
-                                    }
-                                    {...voiceLockHandlers("storage_method")}
-                                  />
-                                ) : null}
-                              </div>
+                          <span className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xl">{meta.emoji}</span>
+                            <span className="font-semibold text-slate-800">{meta.title}</span>
+                            <span className="text-xs text-slate-500">({meta.subtitle})</span>
+                            {filledCount > 0 ? (
+                              <span className="ml-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold">
+                                {filledCount}개 채움
+                              </span>
+                            ) : null}
+                          </span>
+                          <span
+                            className={`text-slate-400 transition-transform ${
+                              detailsOpen ? "rotate-180" : ""
+                            }`}
+                          >
+                            ▾
+                          </span>
+                        </button>
+                        {detailsOpen ? (
+                          <div className="px-4 pb-5 pt-1 space-y-4 border-t border-slate-100">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              {fields.map((field) => (
+                                <div
+                                  key={field.key}
+                                  className={field.wide ? "sm:col-span-2" : undefined}
+                                >
+                                  <label className="text-sm font-semibold text-slate-700 block mb-1">
+                                    {field.label}
+                                  </label>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      className="input-field flex-1"
+                                      value={details[field.key] ?? ""}
+                                      onChange={(e) =>
+                                        setDetails((d) => ({
+                                          ...d,
+                                          [field.key]: e.target.value,
+                                        }))
+                                      }
+                                      placeholder={field.placeholder}
+                                    />
+                                    <VoiceFillButton
+                                      tone="emerald"
+                                      hint={`${field.label} 말로 입력·고치기`}
+                                      onInterim={(t) =>
+                                        setDetails((d) => ({
+                                          ...d,
+                                          [field.key]: cleanShort(t),
+                                        }))
+                                      }
+                                      onText={(t) =>
+                                        setDetails((d) => ({
+                                          ...d,
+                                          [field.key]: cleanShort(t),
+                                        }))
+                                      }
+                                      {...voiceLockHandlers(field.key)}
+                                    />
+                                  </div>
+                                  {field.hint ? (
+                                    <p className="text-[11px] text-slate-500 mt-0.5">
+                                      {field.hint}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              ))}
                             </div>
                           </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
+                        ) : null}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -1130,12 +1101,25 @@ export function SellerProductsPage() {
                     <div className="space-y-4">
                       <div>
                         <label className="label-step">소개 글</label>
+                      <div className="flex items-start gap-2">
                         <textarea
-                          className="input-field text-lg min-h-[180px]"
+                          className="input-field text-lg min-h-[180px] flex-1"
                           value={description}
                           onChange={(e) => setDescription(e.target.value)}
                           placeholder="어떤 물건인지, 왜 좋은지 적어 주세요."
                         />
+                        <VoiceFillButton
+                          tone="violet"
+                          size="lg"
+                          hint="소개 글을 말로 입력·고치기"
+                          onInterim={(t) => setDescription(cleanShort(t))}
+                          onText={(t) => setDescription(cleanShort(t))}
+                          {...voiceLockHandlers("description")}
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        AI·OCR로 채운 글도 🎤 로 말해서 고치거나, 여기서 적어 주세요.
+                      </p>
                       </div>
                       <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4 space-y-3">
                         <p className="font-semibold text-slate-800">AI 도움</p>
@@ -1164,7 +1148,12 @@ export function SellerProductsPage() {
                     </div>
                     <div>
                       {guide ? (
-                        <ListingGuidePreview guide={guide} listingTab={listingTab} title={title} />
+                        <ListingGuideEditor
+                          guide={guide}
+                          listingTab={listingTab}
+                          title={title}
+                          onChange={setGuide}
+                        />
                       ) : (
                         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 p-6 text-center text-sm text-slate-500 min-h-[200px] flex items-center justify-center">
                           「소개 + 이용안내 한번에」를 누르면
@@ -1199,47 +1188,78 @@ export function SellerProductsPage() {
                     </label>
 
                     {/* AI 생성 — 서버에 OpenAI 키가 있을 때만 */}
-                    <div className="rounded-xl border border-slate-200 bg-white/70 p-3 space-y-2">
+                    <div className="rounded-xl border border-slate-200 bg-white/70 p-3 space-y-3">
                       <p className="text-sm font-semibold text-slate-700">또는 AI로 만들기</p>
                       <div>
-                        <label className="text-sm text-slate-600">어떤 장면? (선택)</label>
+                        <label className="text-sm text-slate-600">어떤 장면? (선택, 한국어)</label>
                         <input
                           className="input-field mt-1"
                           value={imagePromptKo}
                           onChange={(e) => setImagePromptKo(e.target.value)}
-                          placeholder={
-                            imagePromptKo.trim() ||
-                            "예: 산지 고사리, 자연광 아래 정갈한 포장"
-                          }
+                          placeholder={title.trim() || "예: 고사리"}
+                          disabled={aiBusy}
                         />
+                        <p className="mt-1 text-xs text-slate-500">
+                          상품 이름만 넣어도 됩니다. 영어는 몰라도 괜찮아요 — 뒤에서 자동으로
+                          번역·그림 처리합니다.
+                        </p>
                       </div>
                       <button
                         type="button"
                         className="btn-primary py-2.5 px-4 disabled:opacity-50 disabled:cursor-not-allowed"
                         disabled={busy || aiBusy}
-                        onClick={() => void generateCoverAi()}
+                        onClick={() => void runCoverAi(!!coverDataUrl)}
                       >
-                        {aiBusy ? "그리는 중…" : "AI로 대표 사진 만들기"}
+                        {aiBusy
+                          ? aiStage === "composing"
+                            ? "장면 구성 중…"
+                            : "사진 그리는 중… (1~2분)"
+                          : coverDataUrl
+                            ? "문구 재생성"
+                            : "AI로 사진 만들기"}
                       </button>
-                      {promptSummary ? (
-                        <p className="text-sm text-shop-tealDark">{promptSummary}</p>
+                      {aiBusy && promptSummary ? (
+                        <p className="text-sm text-shop-tealDark animate-pulse">{promptSummary}</p>
                       ) : null}
                     </div>
 
                     {coverDataUrl ? (
-                      <div className="rounded-xl overflow-hidden border max-w-sm">
+                      <div className="rounded-xl overflow-hidden border max-w-sm relative">
+                        {aiBusy ? (
+                          <div className="absolute inset-0 z-10 bg-white/80 flex flex-col items-center justify-center gap-2 text-sm text-slate-600">
+                            <span className="inline-block h-8 w-8 rounded-full border-2 border-shop-teal border-t-transparent animate-spin" />
+                            {aiStage === "composing"
+                              ? "다른 장면을 구성하고 있어요…"
+                              : "새 사진을 그리고 있어요…"}
+                          </div>
+                        ) : null}
                         <img src={coverDataUrl} alt="대표 사진" className="w-full aspect-[16/10] object-cover" />
                         <button
                           type="button"
                           className="w-full py-2 text-sm text-red-600 bg-white border-t"
-                          onClick={() => setCoverDataUrl(null)}
+                          onClick={() => {
+                            setCoverDataUrl(null);
+                            imagePromptEnRef.current = "";
+                          }}
+                          disabled={aiBusy}
                         >
                           사진 지우기
                         </button>
                       </div>
                     ) : (
-                      <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 h-40 flex items-center justify-center text-slate-400">
-                        아직 대표 사진 없음
+                      <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 h-40 flex flex-col items-center justify-center gap-2 text-slate-400">
+                        {aiBusy ? (
+                          <>
+                            <span className="inline-block h-8 w-8 rounded-full border-2 border-shop-teal border-t-transparent animate-spin" />
+                            <span className="text-sm text-slate-500">
+                              {aiStage === "composing"
+                                ? "장면을 구성하고 있어요…"
+                                : "사진을 그리고 있어요… (1~2분)"}
+                            </span>
+                          </>
+                        ) : (
+                          "아직 대표 사진 없음"
+                        )}
                       </div>
                     )}
                   </div>
@@ -1351,6 +1371,7 @@ export function SellerProductsPage() {
         </div>
       </section>
 
+      <SellerVoicePanel variant="dock" step={step} listingTab={listingTab} />
     </div>
   );
 }

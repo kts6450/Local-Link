@@ -72,15 +72,21 @@ def _seller_system() -> str:
 4. price — 원 단위 숫자만 (예 삼만원이면 30000).
 5. description — 무엇인지, 왜 좋은지 한두 문장.
 6. location — 어느 동네인지 (시·군까지).
-7. stock — 상품이면 개수 정도. 모르면 비워도 됩니다. 숙박·체험이면 비움.
-8. max_guests — 숙박이면 몇 명까지인지. 상품이면 비움.
+7. stock — 일반 상품이면 팔 개수. **체험(category=experience)이면 하루 정원(몇 명까지)** 을 stock에 넣으세요.
+   숙박이면 비움.
+8. max_guests — **숙박**이면 방·숙소 정원. 상품·체험이면 비움.
 
 ## 종류 판정 — 매우 중요
-- 사용자가 "체험·체험상품·체험거리·축제·일정·하루 동안·시간 단위·예약" 같은
-  말을 하면 listing_type=product, category=experience 로 판단합니다.
+- 사용자가 "체험·체험상품·체험거리·축제·일정·하루 동안·시간 단위·예약·낚시·투어" 같은
+  말을 하면 listing_type=product, **category=experience** 로 판단합니다.
   (체험은 별도 listing_type 이 아니라 product 의 한 카테고리로 처리)
 - "민박·펜션·하룻밤·1박·숙소·잠자리" 같은 말이 나오면 listing_type=lodging.
 - 그 외 "쌀·꿀·과일·반찬·생선" 같은 일반 특산은 listing_type=product, category=rural.
+
+## 체험 등록 — 정원
+- 체험이면 「하루에 몇 분까지 받을까요?」「정원이 몇 명인가요?」처럼 물어보세요.
+- 받은 답(예: 24명)은 **stock=24** 로 넣으세요. max_guests 는 쓰지 마세요.
+- 확인 요약에서도 「하루 정원 24명」처럼 말하세요.
 
 하나씩만 묻고, 다 모이면 "이대로 올릴까요?" 하고 확인하세요.
 
@@ -379,6 +385,12 @@ def _seller_rule_slots_from_blob(blob: str) -> dict:
 
     if slots.get("kind") == "lodging":
         slots.setdefault("max_guests", 4)
+    elif slots.get("category") == "experience":
+        cap_m = re.search(r"(\d{1,4})\s*명", text)
+        if cap_m:
+            slots["stock"] = int(cap_m.group(1))
+        else:
+            slots.setdefault("stock", 20)
     elif slots.get("kind") == "product":
         slots.setdefault("stock", 10)
 
@@ -397,21 +409,40 @@ def _seller_slots_complete(slots: dict) -> bool:
 
 def _seller_next_question(slots: dict) -> str:
     if slots.get("kind") not in ("product", "lodging"):
-        return "물건을 파실 거면 상품, 민박이면 숙박이라고 짧게 말씀해 주세요."
+        return "상품, 숙박, 체험 중 무엇을 올리실지 짧게 말씀해 주세요."
     if not isinstance(slots.get("price"), int):
         return "얼마에 올리실지, 숫자로 말씀해 주세요. 예를 들어 만 원이면 만원이라고 하셔도 됩니다."
     if not str(slots.get("location", "")).strip():
         return "어느 동네인지, 시나 군 이름까지 말씀해 주세요."
     if not str(slots.get("title", "")).strip():
         return "이름을 한 번에 불러 주세요. 예를 들어 올해 햅쌀 십 키로, 이렇게요."
+    if slots.get("category") == "experience" and not isinstance(slots.get("stock"), int):
+        return "하루에 몇 분까지 받으실 수 있는지, 숫자로 말씀해 주세요."
+    if slots.get("kind") == "lodging" and not isinstance(slots.get("max_guests"), int):
+        return "숙소 정원이 몇 명인지 말씀해 주세요."
+    if slots.get("kind") == "product" and slots.get("category") != "experience" and not isinstance(
+        slots.get("stock"), int
+    ):
+        return "지금 팔 수 있는 개수를 말씀해 주세요. 모르시면 대략만 말씀하셔도 됩니다."
     return "조금만 더 말씀해 주세요."
 
 
 def _seller_format_summary(slots: dict) -> str:
-    kind_ko = "숙박" if slots.get("kind") == "lodging" else "상품"
+    cat = slots.get("category")
+    if slots.get("kind") == "lodging":
+        kind_ko = "숙박"
+    elif cat == "experience":
+        kind_ko = "체험"
+    else:
+        kind_ko = "상품"
     price = int(slots["price"])
+    extra = ""
+    if cat == "experience" and isinstance(slots.get("stock"), int):
+        extra = f" 하루 정원 {slots['stock']}명,"
+    elif slots.get("kind") == "lodging" and isinstance(slots.get("max_guests"), int):
+        extra = f" 정원 {slots['max_guests']}명,"
     return (
-        f"{kind_ko} «{slots['title']}», {price:,}원, {slots.get('location', '')}에 올리는 것으로"
+        f"{kind_ko} «{slots['title']}», {price:,}원,{extra} {slots.get('location', '')}에 올리는 것으로"
         " 들었습니다."
     )
 
@@ -664,8 +695,9 @@ ready_to_confirm은 위가 모두 채워졌고 사용자가 확정 의사일 때
         extractor = """\
 대화에서 판매 등록 슬롯을 추출하세요.
 - listing_type: product 또는 lodging
+- category: experience(체험), craft, rural, lodging 등
 - title, price(원), description, location
-- 상품이면 stock, 숙박이면 max_guests
+- 일반 상품이면 stock(개수), 체험(category=experience)이면 stock=하루 정원(명), 숙박이면 max_guests
 ready_to_confirm은 필수 항목이 채워지고 확인 단계일 때만 true.
 """
 

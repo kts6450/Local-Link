@@ -33,7 +33,11 @@ if not _listing_ai_logger.handlers:
     _listing_ai_logger.propagate = False  # uvicorn 루트 로거와 중복 출력 방지
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env", override=True)
+
+# OPENAI_BASE_URL= 처럼 빈 값이 있으면 SDK 가 잘못된 URL('')을 써 Connection error 발생
+if not (os.environ.get("OPENAI_BASE_URL") or "").strip():
+    os.environ.pop("OPENAI_BASE_URL", None)
 
 from routers import (  # noqa: E402
     admin,

@@ -21,6 +21,7 @@ from services.listing_ai import (
 )
 from services.listing_package import generate_listing_package
 from services.note_ocr import parse_note_images
+from services.clova_ocr import ocr_engine_info
 from services.listing_photos import (
     add_photo,
     delete_photo,
@@ -185,6 +186,7 @@ def feature_flags():
 def ai_capabilities():
     """프론트에서 AI 버튼 노출 여부."""
     img = image_generation_info()
+    ocr = ocr_engine_info()
     return {
         "description_ai": True,
         "description_claude": anthropic_configured(),
@@ -193,6 +195,11 @@ def ai_capabilities():
         "image_models": img["models"],
         "package_ai": True,
         "package_claude": anthropic_configured(),
+        "ocr_provider": ocr["provider"],
+        "ocr_label": ocr["label"],
+        "ocr_clova_configured": ocr["clova_configured"],
+        "ocr_clova_url_ok": ocr["clova_url_ok"],
+        "ocr_clova_url_hint": ocr["clova_url_hint"],
     }
 
 

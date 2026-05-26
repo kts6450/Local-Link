@@ -39,23 +39,20 @@ export function SellerLayout() {
               <LocalLinkLogo />
             </Link>
 
-            <nav className="hidden lg:flex items-center gap-1 p-1 rounded-full bg-brand-warm border border-brand-line/60">
-              {LISTING_TABS.map((t, i) => {
+            <nav className="hidden lg:flex items-center gap-1 p-1 rounded-full bg-brand-warm border border-brand-line/60 shadow-soft">
+              {LISTING_TABS.map((t) => {
                 const active = activeTab === t.id;
                 return (
-                  <div key={t.id} className="flex items-center">
-                    <NavLink
-                      to={`/seller/dashboard?tab=${t.id}`}
-                      className={active ? sectorOn : sectorOff}
-                    >
-                      {t.label}
-                    </NavLink>
-                    {i < LISTING_TABS.length - 1 && !active && (
-                      <span className="text-brand-line/70 mx-0.5" aria-hidden>
-                        ◆
-                      </span>
-                    )}
-                  </div>
+                  <NavLink
+                    key={t.id}
+                    to={`/seller/dashboard?tab=${t.id}`}
+                    className={active ? sectorOn : sectorOff}
+                  >
+                    <span className="mr-1.5" aria-hidden>
+                      {t.emoji}
+                    </span>
+                    {t.label}
+                  </NavLink>
                 );
               })}
             </nav>
@@ -73,12 +70,14 @@ export function SellerLayout() {
                 {role === "master" ? "운영" : categoryLabel(sellerSector ?? "rural")}
               </span>
               <span className="hidden xl:inline text-sm text-hades-muted">{displayName}님</span>
-              <Link
-                to="/"
-                className="hidden md:inline text-sm font-semibold text-hades-muted hover:text-brand-ink transition-colors"
-              >
-                쇼핑몰
-              </Link>
+              {role === "master" ? (
+                <Link
+                  to="/"
+                  className="hidden md:inline text-sm font-semibold text-hades-muted hover:text-brand-ink transition-colors"
+                >
+                  쇼핑몰
+                </Link>
+              ) : null}
               <button
                 type="button"
                 className="hidden sm:inline text-sm text-hades-muted hover:text-brand-ink transition-colors"
@@ -110,7 +109,7 @@ export function SellerLayout() {
                   상품 등록
                 </NavLink>
                 <NavLink
-                  to="/seller/orders"
+                  to={`/seller/orders?tab=${activeTab}`}
                   className={({ isActive }) => (isActive ? navOn : navOff)}
                 >
                   주문 · 알림
@@ -130,13 +129,16 @@ export function SellerLayout() {
                   </NavLink>
                 ) : null}
               </div>
-              <nav className="lg:hidden flex items-center gap-1 p-1 rounded-full bg-brand-warm border border-brand-line/60 shrink-0">
+              <nav className="lg:hidden flex items-center gap-1 p-1 rounded-full bg-brand-warm border border-brand-line/60 shrink-0 shadow-soft">
                 {LISTING_TABS.map((t) => (
                   <NavLink
                     key={t.id}
                     to={`/seller/dashboard?tab=${t.id}`}
                     className={activeTab === t.id ? sectorOn : sectorOff}
                   >
+                    <span className="mr-1" aria-hidden>
+                      {t.emoji}
+                    </span>
                     {t.label}
                   </NavLink>
                 ))}

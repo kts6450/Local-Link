@@ -1,53 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { OrderStatusBadge } from "../../components/OrderStatusBadge";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { api } from "../../lib/api";
+import {
+  ORDER_FLOW_TABS,
+  NEXT_STEPS,
+  PROGRESS_INDEX,
+  alimtalkKind,
+  flowConfig,
+  formatOrderSchedule,
+  orderFlowType,
+  ordersForFlow,
+  type OrderFlowType,
+} from "../../lib/orderFlow";
 import type { FulfillmentStatus, Order } from "../../types";
-
-const NEXT_STEPS: Partial<Record<FulfillmentStatus, FulfillmentStatus[]>> = {
-  pending: ["preparing", "cancelled"],
-  preparing: ["shipping", "cancelled"],
-  shipping: ["completed", "cancelled"],
-  completed: [],
-  cancelled: [],
-};
-
-const STEP_LABEL: Record<FulfillmentStatus, string> = {
-  pending: "결제 대기",
-  preparing: "준비 시작",
-  shipping: "배송·이용 시작",
-  completed: "완료 처리",
-  cancelled: "취소",
-};
-
-const PROGRESS_STEPS: { id: FulfillmentStatus; label: string; emoji: string }[] = [
-  { id: "pending", label: "결제", emoji: "💳" },
-  { id: "preparing", label: "준비", emoji: "📦" },
-  { id: "shipping", label: "배송", emoji: "🚚" },
-  { id: "completed", label: "완료", emoji: "✅" },
-];
-
-const PROGRESS_INDEX: Record<FulfillmentStatus, number> = {
-  pending: 0,
-  preparing: 1,
-  shipping: 2,
-  completed: 3,
-  cancelled: -1,
-};
 
 type StatusFilter = "all" | FulfillmentStatus;
 
-const FILTER_TABS: { id: StatusFilter; label: string; tone: string }[] = [
-  { id: "all", label: "전체", tone: "bg-brand-ink text-white" },
-  { id: "pending", label: "결제 대기", tone: "bg-amber-500 text-white" },
-  { id: "preparing", label: "준비 중", tone: "bg-blue-500 text-white" },
-  { id: "shipping", label: "배송 중", tone: "bg-indigo-500 text-white" },
-  { id: "completed", label: "완료", tone: "bg-emerald-600 text-white" },
-  { id: "cancelled", label: "취소", tone: "bg-rose-500 text-white" },
-];
-
-function OrderProgress({ status }: { status: FulfillmentStatus }) {
+function OrderProgress({
+  status,
+  flow,
+}: {
+  status: FulfillmentStatus;
+  flow: OrderFlowType;
+}) {
+  const cfg = flowConfig(flow);
   const idx = PROGRESS_INDEX[status];
   const cancelled = status === "cancelled";
 
@@ -61,7 +40,7 @@ function OrderProgress({ status }: { status: FulfillmentStatus }) {
 
   return (
     <div className="flex items-center gap-1 sm:gap-2">
-      {PROGRESS_STEPS.map((step, i) => {
+      {cfg.progressSteps.map((step, i) => {
         const done = i <= idx;
         const current = i === idx;
         return (
@@ -84,7 +63,7 @@ function OrderProgress({ status }: { status: FulfillmentStatus }) {
                 {step.label}
               </span>
             </div>
-            {i < PROGRESS_STEPS.length - 1 && (
+            {i < cfg.progressSteps.length - 1 && (
               <div
                 className={`h-0.5 flex-1 -mt-5 ${
                   i < idx ? "bg-shop-tealDark" : "bg-slate-200"
@@ -98,7 +77,16 @@ function OrderProgress({ status }: { status: FulfillmentStatus }) {
   );
 }
 
+function parseFlowTab(raw: string | null): OrderFlowType {
+  if (raw === "lodging" || raw === "experience" || raw === "product") return raw;
+  return "product";
+}
+
 export function SellerOrdersPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const flowTab = parseFlowTab(searchParams.get("tab"));
+  const cfg = flowConfig(flowTab);
+
   const [orders, setOrders] = useState<Order[]>([]);
   const [agent, setAgent] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -121,33 +109,41 @@ export function SellerOrdersPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  const flowOrders = useMemo(() => ordersForFlow(orders, flowTab), [orders, flowTab]);
+
+  const flowCounts = useMemo(() => {
+    const c: Record<OrderFlowType, number> = { product: 0, lodging: 0, experience: 0 };
+    for (const o of orders) c[orderFlowType(o)]++;
+    return c;
+  }, [orders]);
+
   const counts = useMemo(() => {
     const c: Record<StatusFilter, number> = {
-      all: orders.length,
+      all: flowOrders.length,
       pending: 0,
       preparing: 0,
       shipping: 0,
       completed: 0,
       cancelled: 0,
     };
-    for (const o of orders) c[o.fulfillment_status]++;
+    for (const o of flowOrders) c[o.fulfillment_status]++;
     return c;
-  }, [orders]);
+  }, [flowOrders]);
 
   const totals = useMemo(() => {
-    const active = orders.filter(
+    const active = flowOrders.filter(
       (o) => o.fulfillment_status !== "cancelled" && o.payment_status === "paid"
     );
-    const todayRevenue = active.reduce((sum, o) => sum + o.total, 0);
+    const revenue = active.reduce((sum, o) => sum + o.total, 0);
     return {
-      todayRevenue,
+      revenue,
       todoCount: counts.pending + counts.preparing + counts.shipping,
     };
-  }, [orders, counts]);
+  }, [flowOrders, counts]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return orders.filter((o) => {
+    return flowOrders.filter((o) => {
       if (filter !== "all" && o.fulfillment_status !== filter) return false;
       if (!q) return true;
       return (
@@ -157,18 +153,36 @@ export function SellerOrdersPage() {
         o.items.some((i) => i.title.toLowerCase().includes(q))
       );
     });
-  }, [orders, filter, query]);
+  }, [flowOrders, filter, query]);
+
+  const filterTabs = useMemo(
+    (): { id: StatusFilter; label: string; tone: string }[] => [
+      { id: "all", label: "전체", tone: "bg-brand-ink text-white" },
+      { id: "pending", label: "결제 대기", tone: "bg-amber-500 text-white" },
+      { id: "preparing", label: cfg.statPreparingLabel, tone: "bg-blue-500 text-white" },
+      { id: "shipping", label: cfg.filterShippingLabel, tone: "bg-indigo-500 text-white" },
+      { id: "completed", label: "완료", tone: "bg-emerald-600 text-white" },
+      { id: "cancelled", label: "취소", tone: "bg-rose-500 text-white" },
+    ],
+    [cfg]
+  );
+
+  const setFlowTab = (tab: OrderFlowType) => {
+    setSearchParams({ tab });
+    setFilter("all");
+  };
 
   const makeAlimtalk = async (order: Order) => {
-    const title = order.items[0]?.title ?? "주문 상품";
+    const title = order.items[0]?.title ?? "주문";
+    const flow = orderFlowType(order);
     setBusyId(order.id);
     try {
       const r = await api.sellerAlimtalk({
-        kind: "product",
+        kind: alimtalkKind(flow),
         title,
         buyer_name: order.buyer_name,
         order_id: order.id,
-        description: "",
+        description: formatOrderSchedule(order, flow) ?? "",
         price: order.total,
         location: "",
       });
@@ -192,10 +206,32 @@ export function SellerOrdersPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader badge="공급자" title="주문 · 알림">
-        결제된 주문을 단계별로 진행하세요. 알림 문구는 <strong>복사</strong>해 문자·카톡에
-        붙여 넣습니다.
+      <PageHeader badge={cfg.pageBadge} title={cfg.pageTitle}>
+        {cfg.pageDesc} 알림 문구는 <strong>복사</strong>해 문자·카톡에 붙여 넣습니다.
       </PageHeader>
+
+      <section className="flex flex-wrap gap-2">
+        {ORDER_FLOW_TABS.map((t) => {
+          const active = flowTab === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setFlowTab(t.id)}
+              className={
+                active
+                  ? "rounded-full bg-brand-ink text-white text-sm font-bold px-5 py-2.5"
+                  : "rounded-full border border-brand-line bg-white text-sm font-semibold px-5 py-2.5 text-hades-muted hover:bg-brand-warm"
+              }
+            >
+              {t.emoji} {t.label}{" "}
+              <span className={active ? "opacity-80" : "text-slate-400"}>
+                {flowCounts[t.id]}
+              </span>
+            </button>
+          );
+        })}
+      </section>
 
       {agent.length > 0 && (
         <section className="card p-5 border-shop-teal/20 bg-shop-tealLight/40">
@@ -230,10 +266,10 @@ export function SellerOrdersPage() {
         </div>
         <div className="card p-5 flex items-start gap-4">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-2xl shrink-0">
-            📦
+            {cfg.statPreparingEmoji}
           </span>
           <div className="min-w-0">
-            <p className="text-sm text-hades-muted">준비 중</p>
+            <p className="text-sm text-hades-muted">{cfg.statPreparingLabel}</p>
             <p className="mt-1 text-3xl font-bold text-brand-ink tabular-nums">
               {counts.preparing}
               <span className="text-lg font-semibold ml-0.5">건</span>
@@ -242,10 +278,10 @@ export function SellerOrdersPage() {
         </div>
         <div className="card p-5 flex items-start gap-4">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-2xl shrink-0">
-            🚚
+            {cfg.statShippingEmoji}
           </span>
           <div className="min-w-0">
-            <p className="text-sm text-hades-muted">배송·진행 중</p>
+            <p className="text-sm text-hades-muted">{cfg.statShippingLabel}</p>
             <p className="mt-1 text-3xl font-bold text-brand-ink tabular-nums">
               {counts.shipping}
               <span className="text-lg font-semibold ml-0.5">건</span>
@@ -259,7 +295,7 @@ export function SellerOrdersPage() {
           <div className="min-w-0">
             <p className="text-sm text-hades-muted">진행 매출</p>
             <p className="mt-1 text-3xl font-bold text-brand-ink tabular-nums">
-              {totals.todayRevenue.toLocaleString()}
+              {totals.revenue.toLocaleString()}
               <span className="text-lg font-semibold">원</span>
             </p>
           </div>
@@ -269,7 +305,7 @@ export function SellerOrdersPage() {
       <section className="card p-4 sm:p-5">
         <div className="flex flex-col lg:flex-row lg:items-center gap-4">
           <div className="flex flex-wrap gap-2">
-            {FILTER_TABS.map((t) => (
+            {filterTabs.map((t) => (
               <button
                 key={t.id}
                 type="button"
@@ -304,11 +340,11 @@ export function SellerOrdersPage() {
         <div className="card p-12 text-center text-hades-muted">
           <p className="text-3xl mb-3">📭</p>
           <p className="text-lg font-semibold text-brand-ink">
-            {orders.length === 0
-              ? "아직 주문이 없습니다"
+            {flowOrders.length === 0
+              ? `${cfg.pageTitle}이 아직 없습니다`
               : "이 조건에 맞는 주문이 없습니다"}
           </p>
-          {orders.length > 0 && filter !== "all" && (
+          {flowOrders.length > 0 && filter !== "all" && (
             <button
               type="button"
               onClick={() => setFilter("all")}
@@ -322,23 +358,22 @@ export function SellerOrdersPage() {
         <ul className="space-y-4">
           {filtered.map((o) => {
             const d = drafts[o.id];
+            const flow = orderFlowType(o);
+            const flowCfg = flowConfig(flow);
             const next = NEXT_STEPS[o.fulfillment_status] ?? [];
+            const schedule = formatOrderSchedule(o, flow);
             const itemCount = o.items.reduce((s, i) => s + i.quantity, 0);
             return (
-              <li
-                key={o.id}
-                className="card p-0 overflow-hidden"
-              >
+              <li key={o.id} className="card p-0 overflow-hidden">
                 <div className="p-5 sm:p-6 space-y-5">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div className="space-y-2 min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <OrderStatusBadge status={o.fulfillment_status} />
-                        <span className="font-mono text-xs text-hades-muted">
-                          {o.id}
-                        </span>
+                        <OrderStatusBadge status={o.fulfillment_status} flow={flow} />
+                        <span className="font-mono text-xs text-hades-muted">{o.id}</span>
                         <span className="text-xs text-hades-muted">
-                          · {new Date(o.created_at).toLocaleString("ko-KR", {
+                          ·{" "}
+                          {new Date(o.created_at).toLocaleString("ko-KR", {
                             month: "numeric",
                             day: "numeric",
                             hour: "2-digit",
@@ -352,6 +387,9 @@ export function SellerOrdersPage() {
                           {o.buyer_phone}
                         </span>
                       </p>
+                      {schedule ? (
+                        <p className="text-sm font-semibold text-shop-tealDark">{schedule}</p>
+                      ) : null}
                       <div className="flex flex-wrap items-center gap-2">
                         {o.items.map((i, idx) => (
                           <span
@@ -377,7 +415,7 @@ export function SellerOrdersPage() {
                   </div>
 
                   <div className="rounded-2xl bg-slate-50/70 border border-slate-100 px-4 py-4">
-                    <OrderProgress status={o.fulfillment_status} />
+                    <OrderProgress status={o.fulfillment_status} flow={flow} />
                   </div>
 
                   {(next.length > 0 || o.fulfillment_status !== "completed") && (
@@ -395,7 +433,8 @@ export function SellerOrdersPage() {
                             }
                             onClick={() => void advance(o, n)}
                           >
-                            {n === "cancelled" ? "✕" : "→"} {STEP_LABEL[n]}
+                            {n === "cancelled" ? "✕" : "→"}{" "}
+                            {flowCfg.nextStepLabels[n] ?? n}
                           </button>
                         ))}
                       <button
@@ -412,9 +451,7 @@ export function SellerOrdersPage() {
                   {d && (
                     <div className="rounded-2xl bg-shop-tealLight/30 border border-shop-teal/20 p-4 space-y-3">
                       <div className="flex items-center justify-between">
-                        <p className="text-sm font-bold text-shop-tealDark">
-                          📨 알림 문구
-                        </p>
+                        <p className="text-sm font-bold text-shop-tealDark">📨 알림 문구</p>
                         <button
                           type="button"
                           className={
@@ -435,17 +472,13 @@ export function SellerOrdersPage() {
                       </div>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="rounded-xl bg-white p-3 border border-slate-100">
-                          <p className="text-xs font-bold text-hades-muted mb-1">
-                            👤 구매자에게
-                          </p>
+                          <p className="text-xs font-bold text-hades-muted mb-1">👤 구매자에게</p>
                           <pre className="text-sm whitespace-pre-wrap font-sans text-brand-ink">
                             {String(d.buyer_message)}
                           </pre>
                         </div>
                         <div className="rounded-xl bg-white p-3 border border-slate-100">
-                          <p className="text-xs font-bold text-hades-muted mb-1">
-                            🏪 판매자 체크
-                          </p>
+                          <p className="text-xs font-bold text-hades-muted mb-1">🏪 판매자 체크</p>
                           <pre className="text-sm whitespace-pre-wrap font-sans text-brand-ink">
                             {String(d.seller_reminder)}
                           </pre>

@@ -4,7 +4,7 @@ import { useVoiceSession } from "../hooks/useVoiceSession";
 import { useConversation } from "../store/conversation";
 
 /** 판매자 전용 마이크 (Zero UI) */
-export function MicButton() {
+export function MicButton({ compact = false }: { compact?: boolean }) {
   const { toggle, phase } = useVoiceSession();
   const micLevel = useConversation((s) => s.micLevel);
 
@@ -18,9 +18,13 @@ export function MicButton() {
 
   const disabled = phase === "thinking" || phase === "speaking";
 
+  const btnSize = compact ? "w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem]" : "w-40 h-40 sm:w-44 sm:h-44";
+  const wrapSize = compact ? "w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem]" : "w-40 h-40 sm:w-44 sm:h-44";
+  const iconSize = compact ? "text-3xl sm:text-4xl" : "text-6xl sm:text-7xl";
+
   return (
-    <div className="flex flex-col items-center gap-5 py-4">
-      <div className="relative w-40 h-40 sm:w-44 sm:h-44 flex items-center justify-center">
+    <div className={clsx("flex flex-col items-center", compact ? "gap-2 py-0" : "gap-5 py-4")}>
+      <div className={clsx("relative flex items-center justify-center", wrapSize)}>
         {phase === "idle" && (
           <span className="absolute inset-0 rounded-full bg-brand-green/20 blur-2xl animate-idle_glow" />
         )}
@@ -39,8 +43,10 @@ export function MicButton() {
           onClick={toggle}
           disabled={disabled}
           className={clsx(
-            "relative w-40 h-40 sm:w-44 sm:h-44 rounded-full flex items-center justify-center",
-            "text-6xl sm:text-7xl shadow-xl transition-all duration-300",
+            "relative rounded-full flex items-center justify-center",
+            btnSize,
+            iconSize,
+            "shadow-xl transition-all duration-300",
             phase === "recording" &&
               "bg-hades-danger text-white scale-105 ring-4 ring-hades-danger/30",
             phase === "thinking" &&
@@ -67,36 +73,57 @@ export function MicButton() {
         </button>
       </div>
 
-      <div className="h-8 flex items-center gap-1.5 min-h-8">
-        {phase === "recording" &&
-          Array.from({ length: 9 }).map((_, i) => {
-            const distFromCenter = Math.abs(i - 4) / 4;
-            const factor = (1 - distFromCenter * 0.6) * (0.2 + micLevel * 1.6);
-            const h = Math.max(0.15, Math.min(1, factor));
-            return (
+      {!compact ? (
+        <div className="h-8 flex items-center gap-1.5 min-h-8">
+          {phase === "recording" &&
+            Array.from({ length: 9 }).map((_, i) => {
+              const distFromCenter = Math.abs(i - 4) / 4;
+              const factor = (1 - distFromCenter * 0.6) * (0.2 + micLevel * 1.6);
+              const h = Math.max(0.15, Math.min(1, factor));
+              return (
+                <span
+                  key={i}
+                  className="w-2 bg-hades-danger rounded-full transition-all duration-75"
+                  style={{
+                    height: `${h * 2}rem`,
+                  }}
+                />
+              );
+            })}
+          {phase === "speaking" &&
+            Array.from({ length: 7 }).map((_, i) => (
               <span
                 key={i}
-                className="w-2 bg-hades-danger rounded-full transition-all duration-75"
+                className="w-1.5 bg-brand-green rounded-full animate-wave"
                 style={{
-                  height: `${h * 2}rem`,
+                  height: "1.5rem",
+                  animationDelay: `${i * 0.1}s`,
                 }}
               />
-            );
-          })}
-        {phase === "speaking" &&
-          Array.from({ length: 7 }).map((_, i) => (
-            <span
-              key={i}
-              className="w-1.5 bg-brand-green rounded-full animate-wave"
-              style={{
-                height: "1.5rem",
-                animationDelay: `${i * 0.1}s`,
-              }}
-            />
-          ))}
-      </div>
+            ))}
+        </div>
+      ) : (
+        <div className="h-4 flex items-center gap-1 min-h-4">
+          {phase === "recording" &&
+            Array.from({ length: 5 }).map((_, i) => {
+              const factor = 0.2 + micLevel * 1.2;
+              return (
+                <span
+                  key={i}
+                  className="w-1 bg-hades-danger rounded-full transition-all duration-75"
+                  style={{ height: `${Math.max(0.25, Math.min(1, factor))}rem` }}
+                />
+              );
+            })}
+        </div>
+      )}
 
-      <p className="text-xl sm:text-2xl text-slate-600 text-center max-w-md leading-snug">
+      <p
+        className={clsx(
+          "text-slate-600 text-center leading-snug",
+          compact ? "text-xs sm:text-sm max-w-[12rem]" : "text-xl sm:text-2xl max-w-md"
+        )}
+      >
         {label}
       </p>
     </div>

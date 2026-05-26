@@ -128,7 +128,7 @@ export function ShopPage() {
                 전국 농어촌 판매자가 직접 올린 신선한 특산품만 모았습니다.
                 <br />
                 숙박은 <Link to="/?kind=lodging&theme=lodging" className="font-semibold text-brand-ink underline">스테이</Link>,
-                {" "}체험·클래스는 <Link to="/?kind=product&theme=experience" className="font-semibold text-brand-ink underline">체험 CLASS</Link> 탭에서 확인하세요.
+                체험·클래스는 <Link to="/?kind=product&theme=experience" className="font-semibold text-brand-ink underline">체험</Link> 탭에서 확인하세요.
               </p>
             ) : null}
           </div>
@@ -147,7 +147,7 @@ export function ShopPage() {
                 onClick={() => setQuick({ kind: "all", theme: "all", tab: null })}
                 className={isLandingView ? "chip-active" : "chip"}
               >
-                특산 전체
+                전체
               </button>
               <button
                 type="button"
@@ -156,7 +156,7 @@ export function ShopPage() {
                   filters.theme === "market" && !isLandingView ? "chip-active" : "chip"
                 }
               >
-                특산만 보기
+                특산
               </button>
               <button
                 type="button"
@@ -170,7 +170,7 @@ export function ShopPage() {
                 onClick={() => setQuick({ kind: "product", theme: "experience", tab: null })}
                 className={filters.theme === "experience" ? "chip-active" : "chip"}
               >
-                체험 CLASS
+                체험
               </button>
             </div>
             <label className="relative flex-1 lg:max-w-2xl">

@@ -5,7 +5,7 @@ import type { Turn, VoiceSlots } from "../types";
 export type Phase = "idle" | "recording" | "thinking" | "speaking" | "error";
 
 export const WELCOME_SELLER =
-  "안녕하세요. 로컬링크입니다. 상품이면 상품, 민박이면 숙박이라고 말씀해 주세요. AI로 글 써줘, 사진 만들어 줘도 됩니다.";
+  "안녕하세요. 로컬링크입니다. 상품, 숙박, 체험 중 무엇을 올릴지 말씀해 주세요. AI로 글 써줘, 사진 만들어 줘도 됩니다.";
 
 const initialHistory = (): Turn[] => [{ role: "assistant", content: WELCOME_SELLER }];
 

@@ -24,7 +24,12 @@ export function RequireRole({
   }
 
   if (!roleMatches(current, role)) {
-    const dest = current === "master" ? "/seller/products" : "/";
+    const dest =
+      current === "master"
+        ? "/seller/products"
+        : current === "seller"
+          ? "/seller/dashboard"
+          : "/";
     return <Navigate to={dest} replace />;
   }
 

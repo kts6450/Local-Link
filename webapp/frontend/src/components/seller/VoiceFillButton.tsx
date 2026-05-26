@@ -4,19 +4,15 @@ import { api } from "../../lib/api";
 import { startRecording } from "../../lib/recorder";
 
 interface Props {
-  /** 인식된 텍스트를 받는 콜백. 보통 `setX(t)` 처럼 상태 setter 를 그대로 넘긴다. */
+  /** 최종 인식 텍스트 */
   onText: (text: string) => void;
-  /** 결과 텍스트를 다듬을 때 (예: 숫자만 뽑기). 미지정이면 원문 그대로. */
+  /** 말하는 동안 실시간 미리보기 (Web Speech API 사용 시) */
+  onInterim?: (text: string) => void;
   postProcess?: (text: string) => string;
-  /** 토너 컬러: emerald(기본)·amber·violet 등 tailwind 라벨 일부. */
   tone?: "emerald" | "amber" | "violet" | "slate";
-  /** 더 큰 버튼이 필요할 때 lg, 기본은 sm. */
   size?: "sm" | "lg";
-  /** 마이크 옆에 들릴 짧은 안내 문구 (스크린리더용·툴팁용). */
   hint?: string;
-  /** 외부에서 비활성화 (다른 마이크가 녹음 중일 때 등). */
   disabled?: boolean;
-  /** 한 번에 하나만 녹음되도록 부모가 잠금 토글 — 선택. */
   onActiveChange?: (active: boolean) => void;
 }
 
@@ -39,14 +35,48 @@ const TONE_CLASSES: Record<NonNullable<Props["tone"]>, { base: string; recording
   },
 };
 
+type SpeechResultEvent = {
+  resultIndex: number;
+  results: {
+    length: number;
+    [index: number]: {
+      isFinal: boolean;
+      [index: number]: { transcript?: string };
+    };
+  };
+};
+
+type SpeechErrorEvent = { error?: string };
+
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onresult: ((ev: SpeechResultEvent) => void) | null;
+  onerror: ((ev: SpeechErrorEvent) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+};
+
+function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === "undefined") return null;
+  const w = window as Window & {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
 /**
- * 입력 칸 옆에 붙는 작은 마이크 버튼.
- * - 누르면 녹음 시작 → 다시 누르면 멈추고 ASR → onText 콜백으로 결과 전달.
- * - 8초가 지나면 자동 정지 (실수 방지).
- * - postProcess 로 숫자·단위만 추출하는 등 후가공 가능.
+ * 입력 칸 옆 마이크 — 말하는 동안 글자가 보이고(브라우저 음성인식), 끝나면 칸에 반영.
+ * 브라우저 미지원 시 녹음 → 서버 Whisper ASR 폴백.
  */
 export function VoiceFillButton({
   onText,
+  onInterim,
   postProcess,
   tone = "emerald",
   size = "sm",
@@ -56,17 +86,46 @@ export function VoiceFillButton({
 }: Props) {
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
   const handleRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
+  const speechRef = useRef<SpeechRecognitionLike | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gotFinalRef = useRef(false);
 
-  // 컴포넌트 언마운트 시 안전하게 정리.
   useEffect(() => {
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      // 진행 중 녹음이 있으면 마이크 release 만 하고 결과는 버린다.
+      speechRef.current?.abort();
+      speechRef.current = null;
       void handleRef.current?.stop().catch(() => undefined);
     };
   }, []);
+
+  const applyText = (raw: string, final = true) => {
+    const text = (postProcess ? postProcess(raw) : raw).trim();
+    if (!text) return;
+    if (final) {
+      onText(text);
+    } else {
+      onInterim?.(text);
+    }
+  };
+
+  const finish = () => {
+    setRecording(false);
+    setBusy(false);
+    onActiveChange?.(false);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  };
+
+  const stopSpeech = () => {
+    const rec = speechRef.current;
+    speechRef.current = null;
+    rec?.stop();
+  };
 
   const stopAndTranscribe = async () => {
     const handle = handleRef.current;
@@ -79,68 +138,163 @@ export function VoiceFillButton({
     onActiveChange?.(false);
     if (!handle) return;
     setBusy(true);
+    setStatus("인식 중…");
     try {
       const blob = await handle.stop();
-      if (!blob || blob.size < 800) {
-        // 너무 짧으면 무시 (실수 클릭 등)
+      if (!blob || blob.size < 320) {
+        setStatus("너무 짧아요. 다시 말해 주세요.");
         return;
       }
-      const r = await api.transcribeAudio(blob);
+      const r = await api.transcribeAudio(blob, 45_000);
       const text = (r?.text || r?.raw || "").trim();
       if (text) {
-        onText(postProcess ? postProcess(text) : text);
+        applyText(text, true);
+        setStatus("반영했어요");
+      } else {
+        setStatus("잘 못 들었어요. 다시 말해 주세요.");
       }
     } catch (err) {
-      // 사용자에게 굳이 모달 띄우지 않고 콘솔에만 — 다시 누르면 된다.
       console.warn("[VoiceFillButton] ASR 실패", err);
+      setStatus("인식 실패. 다시 눌러 주세요.");
     } finally {
       setBusy(false);
+      window.setTimeout(() => setStatus(null), 2800);
     }
+  };
+
+  const startWithSpeechApi = () => {
+    const Ctor = getSpeechRecognition();
+    if (!Ctor) return false;
+
+    const rec = new Ctor();
+    speechRef.current = rec;
+    gotFinalRef.current = false;
+    rec.lang = "ko-KR";
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    rec.onresult = (ev) => {
+      let interim = "";
+      let finalText = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i];
+        const t = r[0]?.transcript ?? "";
+        if (r.isFinal) finalText += t;
+        else interim += t;
+      }
+      if (interim.trim()) {
+        setStatus("듣는 중…");
+        applyText(interim, false);
+      }
+      if (finalText.trim()) {
+        gotFinalRef.current = true;
+        applyText(finalText, true);
+        setStatus("반영했어요");
+      }
+    };
+
+    rec.onerror = () => {
+      if (!gotFinalRef.current) {
+        setStatus("다시 말해 주세요");
+      }
+    };
+
+    rec.onend = () => {
+      speechRef.current = null;
+      finish();
+      if (!gotFinalRef.current) {
+        window.setTimeout(() => setStatus(null), 2000);
+      } else {
+        window.setTimeout(() => setStatus(null), 1800);
+      }
+    };
+
+    try {
+      rec.start();
+      setRecording(true);
+      setStatus("듣는 중… 말씀하세요");
+      onActiveChange?.(true);
+      timeoutRef.current = setTimeout(() => {
+        stopSpeech();
+      }, 10_000);
+      return true;
+    } catch {
+      speechRef.current = null;
+      return false;
+    }
+  };
+
+  const startWithRecorder = async () => {
+    const handle = await startRecording();
+    handleRef.current = handle;
+    setRecording(true);
+    setStatus("듣는 중… 다시 누르면 끝");
+    onActiveChange?.(true);
+    timeoutRef.current = setTimeout(() => {
+      void stopAndTranscribe();
+    }, 10_000);
   };
 
   const startNow = async () => {
     if (recording || busy || disabled) return;
+    setStatus(null);
+    if (startWithSpeechApi()) return;
     try {
-      const handle = await startRecording();
-      handleRef.current = handle;
-      setRecording(true);
-      onActiveChange?.(true);
-      // 8초 자동 정지 — 어르신이 누른 줄 잊으셔도 안전하게.
-      timeoutRef.current = setTimeout(() => {
-        void stopAndTranscribe();
-      }, 8000);
+      await startWithRecorder();
     } catch (err) {
       console.warn("[VoiceFillButton] 마이크 권한/시작 실패", err);
+      setStatus("마이크 권한을 확인해 주세요");
+      window.setTimeout(() => setStatus(null), 3000);
     }
+  };
+
+  const onClick = () => {
+    if (recording) {
+      if (speechRef.current) {
+        stopSpeech();
+      } else {
+        void stopAndTranscribe();
+      }
+      return;
+    }
+    void startNow();
   };
 
   const tones = TONE_CLASSES[tone];
   const sizeCls = size === "lg" ? "w-11 h-11 text-xl" : "w-9 h-9 text-base";
 
   return (
-    <button
-      type="button"
-      aria-label={hint}
-      title={hint}
-      disabled={disabled || busy}
-      onClick={() => (recording ? void stopAndTranscribe() : void startNow())}
-      className={[
-        "shrink-0 inline-flex items-center justify-center rounded-full border-2 transition-colors",
-        sizeCls,
-        recording ? tones.recording : tones.base,
-        disabled || busy ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
-      ].join(" ")}
-    >
-      {busy ? (
-        <span
-          className="block h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin"
-          aria-hidden
-        />
-      ) : recording ? (
-        <span aria-hidden>■</span>
-      ) : (
-        <span aria-hidden>🎤</span>
-      )}
-    </button>
+    <div className="flex flex-col items-center gap-1 shrink-0">
+      <button
+        type="button"
+        aria-label={hint}
+        title={status ? `${hint} — ${status}` : hint}
+        disabled={disabled || busy}
+        onClick={onClick}
+        className={[
+          "inline-flex items-center justify-center rounded-full border-2 transition-colors",
+          sizeCls,
+          recording ? tones.recording : tones.base,
+          disabled || busy ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
+        ].join(" ")}
+      >
+        {busy ? (
+          <span
+            className="block h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin"
+            aria-hidden
+          />
+        ) : recording ? (
+          <span aria-hidden>■</span>
+        ) : (
+          <span aria-hidden>🎤</span>
+        )}
+      </button>
+      {status ? (
+        <span className="text-[10px] text-slate-500 max-w-[4.5rem] text-center leading-tight">
+          {status}
+        </span>
+      ) : null}
+    </div>
   );
 }

@@ -398,16 +398,23 @@ export const api = {
     description?: string;
     prompt_en?: string;
   }): Promise<{ image_base64: string; mime_type: string; prompt_used?: string }> => {
-    const res = await fetch("/api/marketplace/ai/draft-image", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`draftListingImage ${res.status}: ${t}`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 180_000);
+    try {
+      const res = await fetch("/api/marketplace/ai/draft-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`draftListingImage ${res.status}: ${t}`);
+      }
+      return res.json();
+    } finally {
+      clearTimeout(timer);
     }
-    return res.json();
   },
 
   createListing: async (body: {

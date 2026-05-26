@@ -1,4 +1,8 @@
-"""수기 메모 이미지 OCR → 상품 등록 초안 (Claude Vision)."""
+"""수기 메모 이미지 OCR → 상품 등록 초안.
+
+- LOCAL_LINK_OCR_PROVIDER=clova + CLOVA 키: Clova OCR → Claude 구조화
+- 그 외: Claude Vision (이미지 직접)
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,7 @@ import re
 from typing import Any
 
 from services.api_keys import anthropic_messages_create, anthropic_response_text, is_anthropic_configured
+from services.clova_ocr import clova_ocr_many, ocr_provider_name
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 _MAX_IMAGES = 5
@@ -137,6 +142,80 @@ def _image_quality_warnings(data: bytes) -> list[str]:
     return warnings
 
 
+_APP_SCREEN_MARKERS = (
+    "갤러리에서 사진 선택",
+    "OCR 결과",
+    "신뢰도",
+    "폼에 채우기",
+    "노트 사진으로",
+    "물건 올리기",
+)
+
+
+def _looks_like_app_screenshot(text: str) -> bool:
+    """앱 UI 캡처 여부 — 경고 문구·버튼 텍스트가 OCR에 섞이면 오인식."""
+    t = text or ""
+    hits = sum(1 for m in _APP_SCREEN_MARKERS if m in t)
+    return hits >= 2 or ("OCR 결과" in t and "신뢰도" in t)
+
+
+_UI_SKIP_SUBSTRINGS = (
+    "갤러리에서 사진 선택",
+    "OCR 결과",
+    "CLOVA OCR",
+    "AI가 한 번",
+    "노트 사진으로",
+    "메모·포스트잇",
+    "용량·가격 옵션",
+    "네이버 CLOVA",
+    "폼에 채우기",
+    "물건 올리기",
+    "아래 옵션란",
+    "상품 추천",
+)
+
+
+def _strip_ui_pollution(raw_text: str) -> tuple[str, list[str]]:
+    """앱 UI 캡처 OCR 잡음 제거 → 메모 본문만 남김."""
+    extra_warnings: list[str] = []
+    if not _looks_like_app_screenshot(raw_text):
+        return raw_text, extra_warnings
+
+    start = len(raw_text)
+    for marker in (
+        "* 판매상품",
+        "* 상품명",
+        "* 원산지",
+        "* 생산자",
+        "* 유통기한",
+        "인식 텍스트",
+    ):
+        idx = raw_text.find(marker)
+        if idx >= 0:
+            start = min(start, idx)
+    chunk = raw_text[start:] if start < len(raw_text) else raw_text
+
+    kept: list[str] = []
+    for line in chunk.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if re.search(r"^신뢰도\s*\d", s):
+            continue
+        if any(skip in s for skip in _UI_SKIP_SUBSTRINGS):
+            continue
+        if re.search(r"(추론하였|확인이 필요|적혀 있지 않|직접 확인|다시 확인)", s):
+            continue
+        kept.append(line)
+
+    cleaned = "\n".join(kept).strip()
+    if cleaned and cleaned != raw_text.strip():
+        extra_warnings.append(
+            "화면 UI 글자가 같이 찍혀 메모 본문만 따로 읽었어요. 다음엔 메모만 크게 찍어 주세요."
+        )
+    return (cleaned if len(cleaned) >= 12 else raw_text), extra_warnings
+
+
 def _parse_first_price(val: Any) -> int | str | None:
     """다중 단가 문자열 → 첫 번째 원화 금액."""
     if val is None:
@@ -185,6 +264,10 @@ _STORAGE_TYPO_FIXES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"냉공"), "냉장"),
     (re.compile(r"냉쟁"), "냉장"),
     (re.compile(r"냉장고"), "냉장"),
+    (re.compile(r"동풍\s*절?되(?:는)?\s*곳"), "통풍 잘 되는 곳"),
+    (re.compile(r"동풍"), "통풍"),
+    (re.compile(r"등풍\s*절?되(?:는)?\s*곳"), "통풍 잘 되는 곳"),
+    (re.compile(r"등풍"), "통풍"),
 ]
 
 
@@ -194,6 +277,46 @@ def _normalize_storage_method(val: str) -> str:
     for pattern, repl in _STORAGE_TYPO_FIXES:
         cleaned = pattern.sub(repl, cleaned)
     return cleaned.strip()[:120]
+
+
+def _ocr_context_blob(fields: dict[str, dict], raw_text: str) -> str:
+    parts = [raw_text]
+    for key in ("description", "notes", "title"):
+        parts.append(str((fields.get(key) or {}).get("value") or ""))
+    return "\n".join(p for p in parts if p)
+
+
+def _reconcile_cross_field_typos(fields: dict[str, dict], raw_text: str) -> list[str]:
+    """원문·다른 필드를 대조해 흔한 손글씨 OCR 혼동을 교정 (예: 기계정하→기계장터)."""
+    notes: list[str] = []
+    blob = _ocr_context_blob(fields, raw_text)
+
+    if re.search(r"기계\s*장터|장터\s*마을|장터마을", blob):
+
+        def fix_jangteo(text: str) -> str:
+            out = re.sub(r"기계\s*정하", "기계장터", text)
+            return out.replace("기계정하", "기계장터")
+
+        prod = fields.get("producer")
+        if isinstance(prod, dict):
+            val = str(prod.get("value") or "")
+            if val and ("기계정하" in val or re.search(r"기계\s*정하", val)):
+                fixed = fix_jangteo(val)
+                fields["producer"] = _field(fixed, 0.94, needs_review=False)
+                notes.append(f"생산자명을 「{fixed}」로 바로잡았어요 (메모·원문의 ‘장터’와 맞춤).")
+
+        desc = fields.get("description")
+        if isinstance(desc, dict):
+            val = str(desc.get("value") or "")
+            if val and ("기계정하" in val or re.search(r"기계\s*정하", val)):
+                fixed = fix_jangteo(val)
+                fields["description"] = _field(
+                    fixed,
+                    max(float(desc.get("confidence") or 0.8), 0.9),
+                    needs_review=False,
+                )
+
+    return notes
 
 
 def _postprocess_detail_fields(fields: dict[str, dict]) -> None:
@@ -279,6 +402,67 @@ def _is_multi_price_warning(msg: str) -> bool:
     )
 
 
+_REQUIRED_FIELD_KEYS = ("title", "price")
+
+
+def _applied_audit_keys(a2a_steps: list[dict[str, Any]]) -> set[str]:
+    keys: set[str] = set()
+    for step in a2a_steps:
+        for key in step.get("applied") or []:
+            if isinstance(key, str):
+                keys.add(key)
+        if step.get("agent") == "openai_ocr_verifier" and step.get("corrected_location"):
+            keys.add("location")
+    return keys
+
+
+def _sync_field_confidence_after_audit(
+    fields: dict[str, dict],
+    *,
+    raw_text: str,
+    a2a_steps: list[dict[str, Any]],
+    variants: list[dict[str, Any]] | None = None,
+) -> None:
+    """LLM 보정(A2A)·규칙 후처리가 끝난 뒤 필드별 confidence/needs_review를 최종 정렬."""
+    applied = _applied_audit_keys(a2a_steps)
+    blobs = "\n".join(p for p in (raw_text, str((fields.get("description") or {}).get("value") or "")) if p)
+
+    for key, val in _extract_details_from_text(raw_text).items():
+        existing = fields.get(key)
+        existing_val = str((existing or {}).get("value") or "").strip()
+        if existing_val in ("", "미기재", "미상", "없음"):
+            conf = _detail_value_confidence(key, val, raw_text)
+            fields[key] = _field(val, conf, needs_review=False)
+
+    for key, item in list(fields.items()):
+        if not isinstance(item, dict):
+            continue
+        val = item.get("value")
+        if val in (None, "", 0):
+            continue
+
+        if key in applied:
+            fields[key] = _field(val, 0.94, needs_review=False)
+            continue
+
+        if key == "price" and variants and len(variants) >= 2:
+            fields[key] = _field(val, 0.93, needs_review=False)
+            continue
+
+        if key in _DETAIL_FIELD_WEIGHTS:
+            val_s = str(val).strip()
+            conf = _detail_value_confidence(key, val_s, blobs or raw_text)
+            if val_s in ("미기재", "미상", "없음"):
+                fields[key] = _field(val, 0.86, needs_review=False)
+            elif conf >= 0.92:
+                fields[key] = _field(val, conf, needs_review=False)
+            continue
+
+        if key in _CORE_FIELD_WEIGHTS and not item.get("needs_review"):
+            conf = max(float(item.get("confidence") or 0.8), 0.88)
+            fields[key] = _field(val, conf, needs_review=False)
+
+
 def _filter_resolved_warnings(
     warnings: list[str],
     *,
@@ -288,8 +472,12 @@ def _filter_resolved_warnings(
 ) -> list[str]:
     """자동 보정된 항목에 대한 중복 경고를 제거."""
     location_fixed = any("location" in (s.get("applied") or []) for s in a2a_steps)
-    storage_val = str((fields.get("storage_method") or {}).get("value") or "")
+    storage_item = fields.get("storage_method") or {}
+    storage_val = str(storage_item.get("value") or "")
     storage_typo_fixed = "냉장" in storage_val and "냉공" not in storage_val
+    storage_ok = bool(storage_val) and not storage_item.get("needs_review")
+    shelf_val = str((fields.get("shelf_life") or {}).get("value") or "").strip()
+    shelf_ok = bool(shelf_val) and shelf_val not in ("미기재", "미상", "없음")
 
     out: list[str] = []
     for w in warnings:
@@ -298,6 +486,10 @@ def _filter_resolved_warnings(
         if location_fixed and ("경항" in w or ("추론" in w and "원산지" in w)):
             continue
         if storage_typo_fixed and "냉공" in w:
+            continue
+        if storage_ok and "보관방법" in w and ("해석" in w or "흐" in w or "동풍" in w or "등풍" in w):
+            continue
+        if shelf_ok and "유통기한" in w and ("미기재" in w or "명확" in w):
             continue
         out.append(w)
     return out
@@ -325,18 +517,18 @@ def _detail_value_confidence(key: str, val: str, source_text: str) -> float:
 def _recompute_confidence_overall(
     fields: dict[str, dict],
     *,
-    initial: float,
     a2a_steps: list[dict[str, Any]],
     missing_required: list[str],
+    variants: list[dict[str, Any]] | None = None,
 ) -> float:
-    """필드별 confidence + A2A 검수 결과를 반영해 최종 신뢰도를 재산정."""
+    """LLM 보정(A2A) 완료 후 최종 필드 상태만으로 신뢰도 산정."""
     weights: dict[str, float] = dict(_CORE_FIELD_WEIGHTS)
     for key, weight in _DETAIL_FIELD_WEIGHTS.items():
         item = fields.get(key)
         if item and str(item.get("value") or "").strip():
             weights[key] = weight
 
-    present: dict[str, float] = {}
+    weighted: list[tuple[float, float]] = []
     for key, weight in weights.items():
         item = fields.get(key)
         if not isinstance(item, dict):
@@ -344,40 +536,51 @@ def _recompute_confidence_overall(
         val = item.get("value")
         if val in (None, "", 0):
             continue
-        present[key] = weight
+        conf = float(item.get("confidence") or 0.85)
+        if item.get("needs_review"):
+            conf *= 0.92
+        weighted.append((conf, weight))
 
-    if present:
-        total_w = sum(present.values())
-        field_score = 0.0
-        for key, weight in present.items():
-            item = fields[key]
-            conf = float(item.get("confidence") or 0.5)
-            if item.get("needs_review"):
-                conf *= 0.88
-            field_score += conf * (weight / total_w)
+    if weighted:
+        total_w = sum(w for _, w in weighted)
+        adjusted = sum(c * w / total_w for c, w in weighted)
     else:
-        field_score = initial
+        adjusted = 0.5
 
-    adjusted = field_score
-    for step in a2a_steps:
-        applied = step.get("applied") or []
-        issues = step.get("issues") or []
-        review_keys = step.get("needs_review_keys") or []
-        if step.get("approved") and not issues and not review_keys:
-            adjusted = min(1.0, adjusted + 0.04)
-        if applied:
-            adjusted = min(1.0, adjusted + 0.015 * len(applied))
-        if issues:
-            adjusted = max(0.35, adjusted - 0.025 * len(issues))
-        if review_keys:
-            adjusted = max(0.35, adjusted - 0.02 * len(review_keys))
+    applied_count = sum(len(s.get("applied") or []) for s in a2a_steps)
+    if any(s.get("approved") for s in a2a_steps):
+        adjusted = min(1.0, adjusted + 0.03)
+    if applied_count:
+        adjusted = min(1.0, adjusted + 0.012 * min(applied_count, 4))
 
-    if missing_required:
-        adjusted = max(0.35, adjusted - 0.06 * len(missing_required))
+    req_missing = [k for k in missing_required if k in _REQUIRED_FIELD_KEYS]
+    if req_missing:
+        adjusted = max(0.35, adjusted - 0.08 * len(req_missing))
 
-    # VLM 초기값과 재산정값을 섞되, 필드 기반이 우세
-    blended = 0.2 * initial + 0.8 * adjusted
-    return round(max(0.0, min(1.0, blended)), 3)
+    title_ok = bool(str((fields.get("title") or {}).get("value") or "").strip())
+    price_ok = fields.get("price", {}).get("value") not in (None, "", 0)
+    core_review = any(
+        bool(fields.get(k, {}).get("needs_review"))
+        for k in ("title", "price", "quantity")
+        if fields.get(k) and fields[k].get("value") not in (None, "", 0)
+    )
+    if title_ok and price_ok and not core_review and not req_missing:
+        adjusted = max(adjusted, 0.90)
+        if applied_count or any(s.get("approved") for s in a2a_steps):
+            adjusted = max(adjusted, 0.93)
+    detail_hits = sum(
+        1
+        for k in _DETAIL_FIELD_WEIGHTS
+        if fields.get(k)
+        and str(fields[k].get("value") or "").strip() not in ("", "미기재", "미상")
+        and float(fields[k].get("confidence") or 0) >= 0.9
+    )
+    if title_ok and price_ok and detail_hits >= 2 and not core_review:
+        adjusted = max(adjusted, 0.92)
+    if variants and len(variants) >= 2 and title_ok and price_ok and not core_review:
+        adjusted = max(adjusted, 0.91)
+
+    return round(max(0.0, min(0.98, adjusted)), 3)
 
 
 def _extract_details_from_text(text: str) -> dict[str, str]:
@@ -448,6 +651,7 @@ def _normalize_fields(raw: dict) -> dict[str, dict]:
             loc = re.sub(r"^국산\s*[·\-/]?\s*", "", loc, flags=re.I)
             loc = re.sub(r"^국내산\s*[·\-/]?\s*", "", loc, flags=re.I)
             loc = re.sub(r"^\(([^)]+)\)$", r"\1", loc)
+            loc = loc.replace("결항시", "포항시")
             val = loc.strip()
         conf = item.get("confidence", 0.5)
         try:
@@ -495,39 +699,12 @@ def _fallback_from_text(text: str) -> dict[str, Any]:
     }
 
 
-def parse_note_images(
-    images_b64: list[str],
-    *,
-    hint_tab: str | None = None,
-) -> dict[str, Any]:
-    """수기 메모 이미지(최대 5장) → 등록 초안 JSON."""
-    if not images_b64:
-        raise ValueError("image required")
-    if len(images_b64) > _MAX_IMAGES:
-        raise ValueError(f"max {_MAX_IMAGES} images")
-
-    warnings: list[str] = []
-    content: list[dict[str, Any]] = []
-    for i, src in enumerate(images_b64):
-        data, media = _decode_image(src)
-        warnings.extend(_image_quality_warnings(data))
-        content.append(
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media,
-                    "data": base64.b64encode(data).decode("ascii"),
-                },
-            }
-        )
-
+def _structure_prompt(hint_tab: str | None) -> str:
     tab_hint = ""
     if hint_tab in ("product", "lodging", "experience"):
         tab_hint = f"\n셀러가 선택한 등록 유형 힌트: {hint_tab}"
-
-    prompt = f"""한국 농어촌 셀러의 수기 메모·포스트잇·종이 영수증 사진입니다.
-OCR로 읽고 JSON만 출력하세요.{tab_hint}
+    return f"""한국 농어촌 셀러의 수기 메모·포스트잇·종이 영수증입니다.
+JSON만 출력하세요.{tab_hint}
 
 목표:
 1) registration_type: product(상품) | reservation(예약) | order(주문) 중 분류
@@ -549,7 +726,7 @@ description 에는 메모에 적힌 다음 항목을 「라벨: 값」 형태로
 - 유통기한: ...
 - 보관방법: ...
 - 원산지: ... (location 보다 더 구체적인 표기 — 농가·읍·리까지 들어가면 좋아요)
-이 4개 라벨은 메모에 적혀 있을 때만 줄을 추가하고, 없으면 생략하세요. 라벨 표기·값은 메모 그대로 옮겨 적되, 줄바꿈은 \n 으로 구분해 주세요.
+이 4개 라벨은 메모에 적혀 있을 때만 줄을 추가하고, 없으면 생략하세요. 라벨 표기·값은 메모 그대로 옮겨 적되, 줄바꿈은 \\n 으로 구분해 주세요.
 예약/주문 필드: customer_name, date_time, quantity(인원), contact_phone(마스킹 010-****-1234),
 title(품목/체험명)
 
@@ -559,7 +736,8 @@ title(품목/체험명)
 - confidence_overall: 위 기준표에 따라 0~1 숫자 하나 (소수 둘째 자리)
 - raw_text: 인식한 전체 텍스트
 - missing_required: 비어 있는 필수 필드 키 목록
-- warnings: 품질·분류 불확실 시 한국어 안내
+- warnings: 품질·분류 불확실 시 한국어 안내 (어르신용 — listing_tab·product 같은 영어/코드명 금지.
+  예: 「체험 탭이 선택돼 있었지만, 메모는 고사리 상품이라 상품으로 채웠어요.」)
 
 location(원산지·지역) 정규화 규칙 — 매우 중요:
 - 한국 행정구역 표기 «시·도 + 시·군·구 + 읍·면·동» 순으로 가능한 한 풍부하게 작성하세요.
@@ -576,60 +754,93 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
 - 시·군 정보가 본문에 없고 면·동도 모를 때만 짧게 두고 needs_review=true 로 두세요.
 """
 
-    content.append({"type": "text", "text": prompt})
 
-    if not is_anthropic_configured():
-        out = _fallback_from_text("")
-        out["warnings"].append("Claude API 키가 없어 OCR을 사용할 수 없습니다.")
-        return out
+def _call_claude_listing_json(*, user_text: str, image_blocks: list[dict] | None = None) -> dict:
+    content: list[dict[str, Any]] = []
+    if image_blocks:
+        content.extend(image_blocks)
+    content.append({"type": "text", "text": user_text})
+    response = anthropic_messages_create(
+        model=DEFAULT_MODEL,
+        max_tokens=1800,
+        system="너는 농어촌 셀러 메모 OCR 전문가다. JSON만 출력한다.",
+        messages=[{"role": "user", "content": content}],
+        thinking={"type": "disabled"},
+        output_config={
+            "effort": "medium",
+            "format": {"type": "json_schema", "schema": _LISTING_SCHEMA},
+        },
+    )
+    text = anthropic_response_text(response)
+    return json.loads(text)
 
-    try:
-        response = anthropic_messages_create(
-            model=DEFAULT_MODEL,
-            max_tokens=1800,
-            system="너는 농어촌 셀러 메모 OCR 전문가다. JSON만 출력한다.",
-            messages=[{"role": "user", "content": content}],
-            thinking={"type": "disabled"},
-            output_config={
-                "effort": "medium",
-                "format": {"type": "json_schema", "schema": _LISTING_SCHEMA},
-            },
+
+def _claude_from_vision(decoded: list[tuple[bytes, str]], hint_tab: str | None) -> dict:
+    image_blocks: list[dict[str, Any]] = []
+    for data, media in decoded:
+        image_blocks.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media,
+                    "data": base64.b64encode(data).decode("ascii"),
+                },
+            }
         )
-        text = anthropic_response_text(response)
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            print("[note_ocr] JSON parse failed; raw text head:", repr(text[:500]))
-            raise exc
-        # 디버깅: Claude 가 무엇을 돌려줬는지 한 번 보고 갑니다.
-        print(
-            "[note_ocr] Claude OK — confidence={:.2f}, fields={}, raw_text_len={}".format(
-                float(data.get("confidence_overall") or 0.0),
-                sorted((data.get("fields") or {}).keys()),
-                len(str(data.get("raw_text") or "")),
-            )
+    prompt = _structure_prompt(hint_tab)
+    prompt = prompt.replace(
+        "JSON만 출력하세요.",
+        "이미지를 OCR로 읽고 JSON만 출력하세요.",
+        1,
+    )
+    data = _call_claude_listing_json(user_text=prompt, image_blocks=image_blocks)
+    print(
+        "[note_ocr] Claude Vision OK — confidence={:.2f}, fields={}, raw_text_len={}".format(
+            float(data.get("confidence_overall") or 0.0),
+            sorted((data.get("fields") or {}).keys()),
+            len(str(data.get("raw_text") or "")),
         )
-    except Exception as exc:
-        import traceback
+    )
+    return data
 
-        print("[note_ocr] OCR call failed:", type(exc).__name__, exc)
-        traceback.print_exc()
-        out = _fallback_from_text("")
-        out["warnings"].append(
-            "AI OCR에 실패했습니다. 사진을 선명하게 다시 올리거나 직접 입력해 주세요."
+
+def _claude_from_text(raw_text: str, hint_tab: str | None, *, source_label: str) -> dict:
+    prompt = _structure_prompt(hint_tab)
+    prompt += f"""
+
+## OCR로 읽은 텍스트 ({source_label})
+아래는 OCR API가 추출한 원문입니다. raw_text 필드에는 **아래 텍스트를 그대로** 넣으세요.
+
+---
+{raw_text}
+---
+"""
+    data = _call_claude_listing_json(user_text=prompt, image_blocks=None)
+    if not str(data.get("raw_text") or "").strip():
+        data["raw_text"] = raw_text
+    print(
+        "[note_ocr] Claude structure OK ({}) — confidence={:.2f}, fields={}".format(
+            source_label,
+            float(data.get("confidence_overall") or 0.0),
+            sorted((data.get("fields") or {}).keys()),
         )
-        out["api_error"] = type(exc).__name__
-        return out
+    )
+    return data
 
+
+def _finalize_listing_draft(
+    data: dict,
+    warnings: list[str],
+    *,
+    hint_tab: str | None,
+    ocr_engine: str,
+) -> dict[str, Any]:
     fields = _normalize_fields(data)
-    overall = float(data.get("confidence_overall") or 0.5)
     missing = list(data.get("missing_required") or [])
     raw_text = str(data.get("raw_text") or "").strip()
 
-    # LLM 이 description/notes 한 덩어리로 던져준 경우, 한국어 라벨 패턴을 정규식으로
-    # 떼어 별도 상세 키(unit/origin/producer/shelf_life/storage_method)로 승격.
     _augment_details_from_blob(fields)
-    # raw_text 에도 있을 수 있으므로 보조 시도.
     if raw_text:
         for key, val in _extract_details_from_text(raw_text).items():
             existing = fields.get(key)
@@ -650,7 +861,6 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
     if listing_tab not in ("product", "lodging", "experience"):
         listing_tab = "product"
 
-    # A2A 검수 — A2(Claude) + A3(OpenAI, max 모드)로 행정구역·단위·일관성 점검
     try:
         from services.agent_pipeline import audit_ocr_listing, pipeline_mode
 
@@ -685,7 +895,7 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
     if variants:
         min_price = min(v["price"] for v in variants)
         prev_conf = float((fields.get("price") or {}).get("confidence") or 0.85)
-        fields["price"] = _field(min_price, max(prev_conf, 0.88), needs_review=False)
+        fields["price"] = _field(min_price, max(prev_conf, 0.92), needs_review=False)
 
     if "title" not in fields or not fields["title"].get("value"):
         if "title" not in missing:
@@ -694,11 +904,20 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
         if reg_type == "product" and "price" not in missing:
             missing.append("price")
 
+    typo_notes = _reconcile_cross_field_typos(fields, raw_text)
+    if typo_notes:
+        warnings.extend(typo_notes)
+
+    _sync_field_confidence_after_audit(
+        fields, raw_text=raw_text, a2a_steps=a2a_steps, variants=variants
+    )
+    _postprocess_detail_fields(fields)
+
     overall = _recompute_confidence_overall(
         fields,
-        initial=overall,
         a2a_steps=a2a_steps,
         missing_required=missing,
+        variants=variants,
     )
 
     out_warnings = list(data.get("warnings") or []) + warnings
@@ -729,4 +948,92 @@ location(원산지·지역) 정규화 규칙 — 매우 중요:
         "a2a_pipeline": a2a_pipeline,
         "a2a_steps": a2a_steps,
         "variants": variants,
+        "ocr_engine": ocr_engine,
     }
+
+
+def parse_note_images(
+    images_b64: list[str],
+    *,
+    hint_tab: str | None = None,
+) -> dict[str, Any]:
+    """수기 메모 이미지(최대 5장) → 등록 초안 JSON."""
+    if not images_b64:
+        raise ValueError("image required")
+    if len(images_b64) > _MAX_IMAGES:
+        raise ValueError(f"max {_MAX_IMAGES} images")
+
+    warnings: list[str] = []
+    decoded: list[tuple[bytes, str]] = []
+    for src in images_b64:
+        data, media = _decode_image(src)
+        warnings.extend(_image_quality_warnings(data))
+        decoded.append((data, media))
+
+    if not is_anthropic_configured() and ocr_provider_name() != "clova":
+        out = _fallback_from_text("")
+        out["warnings"] = list(out.get("warnings") or []) + warnings
+        out["ocr_engine"] = "none"
+        return out
+
+    provider = ocr_provider_name()
+    ocr_engine = "claude_vision"
+    data: dict[str, Any]
+
+    if provider == "clova":
+        try:
+            raw_text, clova_conf = clova_ocr_many(decoded)
+            cleaned, ui_warnings = _strip_ui_pollution(raw_text)
+            if cleaned != raw_text:
+                raw_text = cleaned
+                warnings.extend(ui_warnings)
+            print(
+                "[note_ocr] Clova OK — conf={:.2f}, raw_text_len={}".format(
+                    clova_conf, len(raw_text)
+                )
+            )
+            if not raw_text.strip():
+                raise RuntimeError("Clova OCR 결과가 비어 있습니다.")
+            if not is_anthropic_configured():
+                out = _fallback_from_text(raw_text)
+                out["warnings"] = warnings + list(out.get("warnings") or [])
+                out["ocr_engine"] = "clova"
+                return out
+            data = _claude_from_text(raw_text, hint_tab, source_label="CLOVA OCR")
+            data["raw_text"] = raw_text
+            ocr_engine = "clova+claude"
+            warnings.append("네이버 CLOVA OCR로 글자를 읽고, AI가 항목을 정리했어요.")
+        except Exception as exc:
+            import traceback
+
+            print("[note_ocr] Clova path failed, fallback Vision:", type(exc).__name__, exc)
+            traceback.print_exc()
+            detail = str(exc).strip()
+            if detail:
+                warnings.append(detail)
+            warnings.append("CLOVA OCR을 사용하지 못해 Claude Vision으로 다시 읽었습니다.")
+            data = _claude_from_vision(decoded, hint_tab)
+            ocr_engine = "claude_vision"
+    else:
+        try:
+            data = _claude_from_vision(decoded, hint_tab)
+        except Exception as exc:
+            import traceback
+
+            print("[note_ocr] OCR call failed:", type(exc).__name__, exc)
+            traceback.print_exc()
+            out = _fallback_from_text("")
+            out["warnings"] = warnings + list(out.get("warnings") or [])
+            out["warnings"].append(
+                "AI OCR에 실패했습니다. 사진을 선명하게 다시 올리거나 직접 입력해 주세요."
+            )
+            out["api_error"] = type(exc).__name__
+            out["ocr_engine"] = ocr_engine
+            return out
+
+    return _finalize_listing_draft(
+        data,
+        warnings,
+        hint_tab=hint_tab,
+        ocr_engine=ocr_engine,
+    )

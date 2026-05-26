@@ -21,11 +21,34 @@ export function SellerDashboardPage() {
   const { listings, loading: listingsLoading } = useListingsPoll();
 
   useEffect(() => {
-    api
-      .getSellerDashboard()
-      .then(setStats)
-      .catch((e) => setStatsError(e instanceof Error ? e.message : "불러오기 실패"))
-      .finally(() => setStatsLoading(false));
+    let cancelled = false;
+
+    const load = () => {
+      api
+        .getSellerDashboard()
+        .then((data) => {
+          if (!cancelled) setStats(data);
+        })
+        .catch((e) => {
+          if (!cancelled) {
+            setStatsError(e instanceof Error ? e.message : "불러오기 실패");
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setStatsLoading(false);
+        });
+    };
+
+    load();
+    const timer = window.setInterval(load, 30_000);
+    const onFocus = () => load();
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
 
   const myListings = useMemo(() => {

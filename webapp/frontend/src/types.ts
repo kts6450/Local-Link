@@ -27,6 +27,7 @@ export interface ConsumerSlots {
 
 export interface SellerSlots {
   kind?: "product" | "lodging";
+  category?: string;
   title?: string;
   price?: number;
   description?: string;
@@ -95,8 +96,9 @@ export interface ListingVariant {
   stock?: number;
 }
 
-/** 상품 상세 정보 — 모든 필드 옵션. 빈 값은 저장하지 않음. */
+/** 상세 정보 — 탭별로 쓰는 필드만 저장. 빈 값은 저장하지 않음. */
 export interface ListingDetails {
+  /* 상품 */
   unit?: string;
   origin?: string;
   producer?: string;
@@ -107,6 +109,20 @@ export interface ListingDetails {
   min_order?: string;
   ingredients?: string;
   allergens?: string;
+  /* 체험 */
+  duration?: string;
+  meeting_point?: string;
+  includes?: string;
+  what_to_bring?: string;
+  min_age?: string;
+  weather_policy?: string;
+  /* 숙박 */
+  check_in?: string;
+  check_out?: string;
+  amenities?: string;
+  parking?: string;
+  breakfast?: string;
+  pet_policy?: string;
 }
 
 export interface Listing {
@@ -192,6 +208,11 @@ export interface OrderItem {
   title: string;
   quantity: number;
   unit_price: number;
+  kind?: string;
+  category?: string;
+  stay_start?: string | null;
+  stay_end?: string | null;
+  variant_label?: string | null;
 }
 
 export type FulfillmentStatus =

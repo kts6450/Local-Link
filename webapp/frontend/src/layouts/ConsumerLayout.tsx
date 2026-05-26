@@ -40,7 +40,7 @@ export function ConsumerLayout() {
               </Link>
               {role === "master" ? " · 운영" : ""}
             </span>
-            {role === "seller" || role === "master" ? (
+            {role === "master" ? (
               <Link
                 to="/seller/dashboard"
                 className="hidden lg:inline text-sm font-semibold text-hades-muted hover:text-brand-ink transition-colors"
