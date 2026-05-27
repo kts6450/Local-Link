@@ -262,6 +262,84 @@ export const api = {
       reviews: number;
     }>("/api/admin/stats"),
 
+  /** 음성 로그 목록 */
+  adminListVoiceLogs: (page = 1, limit = 20) =>
+    getJson<{
+      items: {
+        id: string;
+        user_id: string | null;
+        seller_id: string | null;
+        seller_email: string | null;
+        source: string;
+        has_audio: boolean;
+        raw_text: string;
+        corrected_text: string;
+        created_at: string;
+      }[];
+      total: number;
+      page: number;
+      limit: number;
+    }>(`/api/admin/voice-logs?page=${page}&limit=${limit}`),
+
+  adminDeleteVoiceLog: (id: string) =>
+    fetch(`/api/admin/voice-logs/${id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    }).then((r) => {
+      if (!r.ok) throw new Error(`adminDeleteVoiceLog ${r.status}`);
+      return r.json() as Promise<{ ok: boolean }>;
+    }),
+
+  /** 음성 로그 오디오 URL (audio src 에 직접 사용) */
+  adminVoiceLogAudioUrl: (id: string) => `/api/admin/voice-logs/${id}/audio`,
+
+  /** OCR 로그 목록 */
+  adminListOcrLogs: (page = 1, limit = 20) =>
+    getJson<{
+      items: {
+        id: string;
+        user_id: string | null;
+        seller_id: string | null;
+        seller_email: string | null;
+        image_count: number;
+        has_images: boolean;
+        ocr_raw_text: string;
+        confidence: number | null;
+        listing_tab: string | null;
+        fields_summary: Record<string, unknown>;
+        warnings: string[];
+        created_at: string;
+      }[];
+      total: number;
+      page: number;
+      limit: number;
+    }>(`/api/admin/ocr-logs?page=${page}&limit=${limit}`),
+
+  adminDeleteOcrLog: (id: string) =>
+    fetch(`/api/admin/ocr-logs/${id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    }).then((r) => {
+      if (!r.ok) throw new Error(`adminDeleteOcrLog ${r.status}`);
+      return r.json() as Promise<{ ok: boolean }>;
+    }),
+
+  /** OCR 로그 이미지 URL (img src 에 직접 사용) */
+  adminOcrLogImageUrl: (id: string, n: number) =>
+    `/api/admin/ocr-logs/${id}/image/${n}`,
+
+  /** 음성 로그 전체 ZIP 다운로드 URL */
+  adminVoiceLogsZipUrl: () => `/api/admin/voice-logs/zip`,
+
+  /** 음성 로그 전체 CSV 다운로드 URL */
+  adminVoiceLogsCsvUrl: () => `/api/admin/voice-logs/csv`,
+
+  /** OCR 로그 전체 ZIP 다운로드 URL */
+  adminOcrLogsZipUrl: () => `/api/admin/ocr-logs/zip`,
+
+  /** OCR 로그 전체 CSV 다운로드 URL */
+  adminOcrLogsCsvUrl: () => `/api/admin/ocr-logs/csv`,
+
   getReviews: (listingId: string) =>
     getJson<{
       count: number;
@@ -578,6 +656,7 @@ export const api = {
       const res = await fetch("/api/voice/turn", {
         method: "POST",
         body: fd,
+        headers: authHeaders(),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -608,6 +687,7 @@ export const api = {
       const res = await fetch("/api/voice/asr", {
         method: "POST",
         body: fd,
+        headers: authHeaders(),
         signal: controller.signal,
       });
       if (!res.ok) {

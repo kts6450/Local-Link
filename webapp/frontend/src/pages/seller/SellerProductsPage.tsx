@@ -131,9 +131,134 @@ export function SellerProductsPage() {
       .trim();
   // 「열 개」, "20" 같은 숫자 표현을 정수로.
   const extractDigits = (s: string) => {
+    // 1. 공백, '원', '개', '명', '짜리', 온점 등 제거
+    let cleaned = s.replace(/[,원개명짜리\s.!?。·]/g, "").trim();
+    if (!cleaned) return "";
+
+    // 2. 순수 숫자 문자열이면 그대로 반환
+    if (/^\d+$/.test(cleaned)) {
+      return cleaned;
+    }
+
+    // 3. 고유어 숫자 처리 (정원, 수량 등에서 "열개", "네명", "스물네개" 등으로 말할 때)
+    const nativeTens: Record<string, number> = {
+      "열": 10,
+      "스물": 20, "스무": 20,
+      "서른": 30,
+      "마흔": 40,
+      "쉰": 50,
+      "예순": 60,
+      "일흔": 70,
+      "여든": 80,
+      "아흔": 90
+    };
+
+    const nativeOnes: Record<string, number> = {
+      "한": 1, "하나": 1,
+      "두": 2, "둘": 2,
+      "세": 3, "셋": 3, "석": 3,
+      "네": 4, "넷": 4, "넉": 4,
+      "다섯": 5,
+      "여섯": 6,
+      "일곱": 7,
+      "여덟": 8,
+      "아홉": 9
+    };
+
+    let nativeVal = 0;
+    let tempStr = cleaned;
+
+    for (const [key, val] of Object.entries(nativeTens)) {
+      if (tempStr.startsWith(key)) {
+        nativeVal += val;
+        tempStr = tempStr.substring(key.length);
+        break;
+      }
+    }
+
+    for (const [key, val] of Object.entries(nativeOnes)) {
+      if (tempStr === key) {
+        nativeVal += val;
+        tempStr = "";
+        break;
+      }
+    }
+
+    if (nativeVal > 0 && tempStr === "") {
+      return String(nativeVal);
+    }
+
+    // 4. 한자어 숫자 처리 (가격 등에서 "오백원", "사만 이천원", "4만 2천원" 등으로 말할 때)
+    const krNums: Record<string, number> = {
+      "일": 1, "이": 2, "삼": 3, "사": 4, "오": 5, "육": 6, "칠": 7, "팔": 8, "구": 9,
+      "공": 0, "영": 0
+    };
+
+    const krUnits: Record<string, number> = {
+      "십": 10, "백": 100, "천": 1000
+    };
+
+    const parseSinoBlock = (block: string): number => {
+      block = block.trim();
+      if (!block) return 0;
+      if (/^\d+$/.test(block)) {
+        return parseInt(block, 10);
+      }
+
+      let sum = 0;
+      let currentVal = 0;
+
+      const tokens = block.match(/(\d+|[가-힣])/g);
+      if (!tokens) return 0;
+
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (/^\d+$/.test(token)) {
+          currentVal = parseInt(token, 10);
+        } else if (krNums[token] !== undefined) {
+          currentVal = krNums[token];
+        } else if (krUnits[token] !== undefined) {
+          const unitVal = krUnits[token];
+          if (currentVal === 0) {
+            sum += unitVal;
+          } else {
+            sum += currentVal * unitVal;
+            currentVal = 0;
+          }
+        }
+      }
+      sum += currentVal;
+      return sum;
+    };
+
+    let total = 0;
+    let remaining = cleaned;
+
+    if (remaining.includes("억")) {
+      const parts = remaining.split("억");
+      const partVal = parts[0].trim() ? parseSinoBlock(parts[0]) : 1;
+      total += partVal * 100000000;
+      remaining = parts[1] || "";
+    }
+
+    if (remaining.includes("만")) {
+      const parts = remaining.split("만");
+      const partVal = parts[0].trim() ? parseSinoBlock(parts[0]) : 1;
+      total += partVal * 10000;
+      remaining = parts[1] || "";
+    }
+
+    total += parseSinoBlock(remaining);
+
+    if (total > 0) {
+      return String(total);
+    }
+
+    // 5. 파싱 실패 시 폴백: 문자열에 포함된 연속된 첫 숫자 시퀀스 추출
     const m = s.match(/(\d{1,6})/);
     return m ? m[1] : "";
   };
+
 
   const selectListingTab = useCallback((tab: ListingTab) => {
     if (listingTab === tab) return;
@@ -641,7 +766,7 @@ export function SellerProductsPage() {
   const banner = STEP_BANNERS[step] ?? STEP_BANNERS[1];
 
   return (
-    <div className="space-y-8 pb-44 sm:pb-48">
+    <div className="space-y-8 pb-64 sm:pb-72">
       {listingSubmitted && (
         <div className="rounded-2xl border border-shop-teal/30 bg-shop-tealLight/60 p-5 flex flex-wrap items-center justify-between gap-3">
           <p className="font-semibold text-shop-tealDark">

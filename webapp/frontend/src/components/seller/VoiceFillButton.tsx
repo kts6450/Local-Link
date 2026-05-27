@@ -239,13 +239,105 @@ export function VoiceFillButton({
   const startNow = async () => {
     if (recording || busy || disabled) return;
     setStatus(null);
-    if (startWithSpeechApi()) return;
-    try {
-      await startWithRecorder();
-    } catch (err) {
-      console.warn("[VoiceFillButton] 마이크 권한/시작 실패", err);
-      setStatus("마이크 권한을 확인해 주세요");
-      window.setTimeout(() => setStatus(null), 3000);
+
+    // Web Speech API 지원 여부 확인
+    const Ctor = getSpeechRecognition();
+    if (Ctor) {
+      try {
+        // SpeechRecognition과 녹음기(배경 녹음/로그 저장용)를 동시에 시작
+        const rec = new Ctor();
+        speechRef.current = rec;
+        gotFinalRef.current = false;
+        rec.lang = "ko-KR";
+        rec.continuous = false;
+        rec.interimResults = true;
+        rec.maxAlternatives = 1;
+
+        // 배경 녹음용 녹음기 시작
+        const handle = await startRecording();
+        handleRef.current = handle;
+
+        rec.onresult = (ev) => {
+          let interim = "";
+          let finalText = "";
+          for (let i = ev.resultIndex; i < ev.results.length; i++) {
+            const r = ev.results[i];
+            const t = r[0]?.transcript ?? "";
+            if (r.isFinal) finalText += t;
+            else interim += t;
+          }
+          if (interim.trim()) {
+            setStatus("듣는 중…");
+            applyText(interim, false);
+          }
+          if (finalText.trim()) {
+            gotFinalRef.current = true;
+            applyText(finalText, true);
+            setStatus("반영했어요");
+          }
+        };
+
+        rec.onerror = () => {
+          if (!gotFinalRef.current) {
+            setStatus("다시 말해 주세요");
+          }
+        };
+
+        rec.onend = () => {
+          speechRef.current = null;
+          finish();
+
+          // 배경 녹음 종료 및 서버 전송 (관리자 음성로그 저장용)
+          const backgroundHandle = handleRef.current;
+          handleRef.current = null;
+          if (backgroundHandle) {
+            void (async () => {
+              try {
+                const blob = await backgroundHandle.stop();
+                if (blob && blob.size >= 320) {
+                  // 백엔드 비동기 호출 (사용자는 입력을 바로 확인하고 대기하지 않음)
+                  await api.transcribeAudio(blob);
+                }
+              } catch (e) {
+                console.warn("[VoiceFillButton] 백그라운드 음성로그 저장 실패", e);
+              }
+            })();
+          }
+
+          if (!gotFinalRef.current) {
+            window.setTimeout(() => setStatus(null), 2000);
+          } else {
+            window.setTimeout(() => setStatus(null), 1800);
+          }
+        };
+
+        rec.start();
+        setRecording(true);
+        setStatus("듣는 중… 말씀하세요");
+        onActiveChange?.(true);
+        timeoutRef.current = setTimeout(() => {
+          rec.stop();
+        }, 10_000);
+
+      } catch (err) {
+        console.warn("[VoiceFillButton] Web Speech + 녹음 시작 실패", err);
+        // 폴백: 일반 녹음 모드로 진행
+        try {
+          await startWithRecorder();
+        } catch (e2) {
+          setStatus("마이크 권한을 확인해 주세요");
+          window.setTimeout(() => setStatus(null), 3000);
+        }
+      }
+    } else {
+      // Web Speech API 미지원 시 기존의 녹음기 방식 사용 (폴백)
+      try {
+        await startWithRecorder();
+      } catch (err) {
+        console.warn("[VoiceFillButton] 마이크 권한/시작 실패", err);
+        setStatus("마이크 권한을 확인해 주세요");
+        window.setTimeout(() => setStatus(null), 3000);
+      }
     }
   };
 

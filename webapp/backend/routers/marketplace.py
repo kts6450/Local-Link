@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,6 +52,9 @@ from services.seller_extras import (
 router = APIRouter(prefix="/api/marketplace", tags=["marketplace"])
 
 _BRAND_PATH = Path(__file__).resolve().parent.parent / "data" / "brand.json"
+# OCR 이미지 저장 폴더 — 없으면 자동 생성
+_OCR_DIR = Path(__file__).resolve().parent.parent / "uploads" / "ocr"
+_OCR_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.get("/brand")
@@ -354,11 +359,51 @@ def post_ocr_listing_draft(
     if user.get("role") not in ("seller", "master"):
         raise HTTPException(status_code=403, detail="공급자 로그인이 필요합니다.")
     try:
-        return parse_note_images(body.images_base64, hint_tab=body.hint_tab)
+        result = parse_note_images(body.images_base64, hint_tab=body.hint_tab)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"OCR 실패: {e}") from e
+
+    # OCR 로그 저장 (실패해도 응답에 영향 없음)
+    try:
+        log_id = str(uuid.uuid4())
+        saved_paths: list[str] = []
+        for i, b64_str in enumerate(body.images_base64):
+            try:
+                raw = (b64_str or "").strip()
+                if raw.startswith("data:"):
+                    _, _, raw = raw.partition(",")
+                img_bytes = base64.b64decode(raw)
+                file_name = f"{log_id}_{i}.jpg"
+                file_path = _OCR_DIR / file_name
+                file_path.write_bytes(img_bytes)
+                saved_paths.append(str(file_path))
+            except Exception:
+                pass
+
+        from db.database import SessionLocal
+        from db.models import OcrLogRow
+
+        now = datetime.now(timezone.utc).isoformat()
+        row = OcrLogRow(
+            id=log_id,
+            user_id=user.get("id"),
+            seller_id=user.get("seller_id"),
+            image_paths=",".join(saved_paths) if saved_paths else None,
+            ocr_raw_text=result.get("raw_text") or "",
+            parsed_json=json.dumps(result, ensure_ascii=False),
+            confidence=result.get("confidence_overall"),
+            created_at=now,
+        )
+        with SessionLocal() as session:
+            session.add(row)
+            session.commit()
+    except Exception as e:  # noqa: BLE001
+        print(f"[ocr_log] 저장 실패 (무시됨): {e}")
+
+    return result
+
 
 
 @router.get("/covers/{listing_id}")

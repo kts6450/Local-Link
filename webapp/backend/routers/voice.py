@@ -17,9 +17,14 @@ from __future__ import annotations
 import io
 import json
 import urllib.parse
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from services.asr import asr_status_detail, transcribe_audio_bytes
 from services.demo_config import a2a_chain_for_status, is_demo_mode
@@ -28,6 +33,71 @@ from services.api_keys import provider_status
 from services.asr_correction import correct_asr_text, correction_mode
 from services.llm import chat_turn_for_mode, is_configured as llm_configured
 from services.tts import synthesize_mp3
+
+# 오디오 저장 폴더 — 없으면 자동 생성
+_AUDIO_DIR = Path(__file__).resolve().parent.parent / "uploads" / "audio"
+_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def _optional_user(
+    cred: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> Optional[dict]:
+    """인증 토큰이 있으면 사용자 정보 반환, 없으면 None (asr 는 비로그인도 허용)."""
+    if cred is None:
+        return None
+    try:
+        from services.auth_tokens import decode_access_token
+        from services.auth_service import user_from_token_payload
+        payload = decode_access_token(cred.credentials)
+        if not payload or not payload.get("sub"):
+            return None
+        return user_from_token_payload(payload)
+    except Exception:
+        return None
+
+
+def _save_voice_log(
+    *,
+    audio_bytes: bytes,
+    raw_text: str,
+    corrected_text: str,
+    source: str,
+    user: Optional[dict],
+) -> None:
+    """음성 로그를 파일 + DB에 저장 (실패해도 API 응답에 영향 없음)."""
+    try:
+        log_id = str(uuid.uuid4())
+        audio_path: Optional[str] = None
+
+        # 오디오 파일 저장
+        if audio_bytes:
+            file_name = f"{log_id}.wav"
+            file_path = _AUDIO_DIR / file_name
+            file_path.write_bytes(audio_bytes)
+            audio_path = str(file_path)
+
+        # DB 저장
+        from db.database import SessionLocal
+        from db.models import VoiceLogRow
+
+        now = datetime.now(timezone.utc).isoformat()
+        row = VoiceLogRow(
+            id=log_id,
+            user_id=user.get("id") if user else None,
+            seller_id=user.get("seller_id") if user else None,
+            source=source,
+            audio_path=audio_path,
+            raw_text=raw_text or "",
+            corrected_text=corrected_text or "",
+            created_at=now,
+        )
+        with SessionLocal() as session:
+            session.add(row)
+            session.commit()
+    except Exception as e:  # noqa: BLE001
+        print(f"[voice_log] 저장 실패 (무시됨): {e}")
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 
@@ -50,7 +120,10 @@ def status():
 
 
 @router.post("/asr")
-async def asr_only(audio: UploadFile = File(...)):
+async def asr_only(
+    audio: UploadFile = File(...),
+    user: Optional[dict] = Depends(_optional_user),
+):
     """LLM 호출 없이 ASR만 — 셀러 폼에서 단일 칸을 음성으로 채울 때 사용."""
     audio_bytes = await audio.read()
     if not audio_bytes:
@@ -59,12 +132,22 @@ async def asr_only(audio: UploadFile = File(...)):
         raw = transcribe_audio_bytes(audio_bytes)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"ASR 실패: {e}")
-    # 한국어 손글씨 톤·맞춤법 보정만 가볍게.
+    # 한국어 손글씨 톤·맞춤법 보정만 가볍게. 단일 필드 입력은 속도가 중요하므로 규칙 보정만 가볍게 적용합니다.
     try:
-        correction = correct_asr_text(raw, mode="seller", history=[])
+        correction = correct_asr_text(raw, mode="seller", history=[], rules_only=True)
         text = correction.text or raw
     except Exception:
         text = raw
+
+    # 음성 로그 저장 (비동기 실패 허용)
+    _save_voice_log(
+        audio_bytes=audio_bytes,
+        raw_text=raw.strip(),
+        corrected_text=text.strip(),
+        source="asr",
+        user=user,
+    )
+
     return {"text": text.strip(), "raw": raw.strip()}
 
 
@@ -74,6 +157,7 @@ async def turn(
     history: str = Form("[]"),
     mode: str = Form("consumer"),
     form_state: str = Form("{}"),
+    user: Optional[dict] = Depends(_optional_user),
 ):
     audio_bytes = await audio.read()
     if not audio_bytes:
@@ -107,6 +191,13 @@ async def turn(
 
     if not user_text.strip():
         # 인식 결과가 비어있으면 LLM 호출 스킵, 사용자에게 다시 요청
+        _save_voice_log(
+            audio_bytes=audio_bytes,
+            raw_text=user_text_raw,
+            corrected_text="",
+            source="turn",
+            user=user,
+        )
         return {
             "user_text": "",
             "user_text_raw": user_text_raw,
@@ -140,6 +231,16 @@ async def turn(
         "a2a_steps": correction.a2a_steps,
     }
     result["tts_url"] = _safe_tts_url(result.get("reply", ""))
+
+    # 음성 로그 저장 (비동기 실패 허용)
+    _save_voice_log(
+        audio_bytes=audio_bytes,
+        raw_text=user_text_raw,
+        corrected_text=user_text,
+        source="turn",
+        user=user,
+    )
+
     return result
 
 
