@@ -1,0 +1,68 @@
+# ════════════════════════════════════════════════════════════
+# 랩실 서버 실측 설정 (2026-05 SSH + 학습 로그 기준)
+# Git 기본(config.yaml)과 차이: num_epochs=2, output_dir 실험별 변경
+#
+# 사용 예:
+#   python -m train.finetune --config configs/config_server.yaml \
+#     --train_manifest C:/TTT-data/processed/elderly_command_train.jsonl \
+#     --val_manifest   C:/TTT-data/processed/elderly_command_val.jsonl
+# ════════════════════════════════════════════════════════════
+
+model:
+  # Whisper-small: medium/large 대비 VRAM·학습 시간 부담 적음.
+  # 노인·방언 도메인 파인튜닝에 실용적인 균형점.
+  base: "openai/whisper-small"
+  language: "ko"       # 한국어 강제 (generate 시 language="ko")
+  task: "transcribe"   # 번역(transcribe) 아닌 받아쓰기
+
+finetune:
+  # Whisper 파인튜닝 관례값. 사전학습 가중치를 크게 망가뜨리지 않는 범위.
+  learning_rate: 5.0e-5
+
+  # GPU micro-batch. 원래 8이었으나 VRAM OOM → 4로 축소 (커밋 4b6b8cf).
+  # 한 번에 GPU에 올리는 샘플 수. fp16 + gradient checkpointing과 함께 사용.
+  batch_size: 4
+
+  # micro-batch 4 × accum 4 = 유효 배치 16.
+  # batch 8과 비슷한 학습 스케일을 유지하면서 VRAM 한계를 넘지 않도록 함.
+  gradient_accumulation_steps: 4
+
+  # Windows + mel 전처리: 0이면 GPU idle, 너무 크면 RAM/디스크 I/O 부담.
+  num_workers: 2
+
+  # Git 기본 3 → 서버 yaml만 2로 수정.
+  # combined ~1517h, elderly_command 36만 train 등 대용량이라 1 epoch만 해도 step 8만+.
+  # elderly_command 로그: epoch 2 끝 Val 11.34% > best 10.86% → 3 epoch까지 갈 이득 적음.
+  num_epochs: 2
+
+  # 초반 10% step 동안 LR 선형 증가 → cosine 감쇠. 학습 초기 불안정 방지.
+  warmup_ratio: 0.1
+
+  # AdamW L2 정규화. 과적합 완화.
+  weight_decay: 0.01
+
+  # Val WER 검증 주기. 매 step 검증은 27.5만 val 기준 너무 느림.
+  # elderly_command: step 40000(=2000×20)에서 best 10.86% 저장.
+  eval_steps: 2000
+
+  # epoch_XX 체크포인트 중간 저장 주기 (best와 별도).
+  save_steps: 1000
+
+  # 실험마다 변경: elderly_command | gangwon | combined | freeconv
+  # 같은 train/finetune.py, 다른 output_dir → checkpoint 혼선 방지.
+  output_dir: "C:/TTT-data/checkpoints/elderly_command"
+
+data:
+  sample_rate: 16000   # Whisper 표준. 16 kHz mono.
+  max_duration_sec: 30 # Whisper context 한도 내. 더 긴 발화는 잘림/제외.
+  min_duration_sec: 0.5 # 너무 짧은 무음·잡음 클립 필터.
+  processed_path: "C:/TTT-data/processed"  # manifest.jsonl 위치
+
+evaluation:
+  test_ratio: 0.1      # split_protocol 사용 시 test 비율 (manifest 직접 지정 시 무관)
+  metrics: ["wer", "cer"]  # WER=단어 오류율, CER=글자 오류율
+  output_dir: "./evaluation/results"  # run_baselines.py 결과 저장
+
+logging:
+  level: "INFO"
+  file: "./logs/ttt.log"  # 4월 gangwon/combined run 기록. 5월 elderly는 TTT-data/logs/ 쪽
