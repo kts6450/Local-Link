@@ -121,19 +121,19 @@ curl http://127.0.0.1:8088/api/marketplace/ai/capabilities
 ```mermaid
 flowchart TB
   subgraph Client["브라우저 (React)"]
-    Shop[쇼핑몰 / 장바구니]
+    Shop["쇼핑몰 · 장바구니"]
     Seller[판매자 대시보드·등록]
     WS[Web Speech API]
   end
 
   subgraph API["FastAPI :8088"]
-    Voice[/api/voice/*]
-    Mkt[/api/marketplace/*]
-    Orders[/api/orders/*]
+    Voice["/api/voice"]
+    Mkt["/api/marketplace"]
+    Orders["/api/orders"]
   end
 
   subgraph AI["AI · ASR"]
-    Whisper[Whisper-small FT<br/>elderly_command / gangwon / combined]
+    Whisper["Whisper-small FT<br/>elderly_command · gangwon · combined"]
     Correct[ASR 교정 rules + A2A]
     LLM[Claude · OpenAI · Gemini]
     OCR[CLOVA OCR]
