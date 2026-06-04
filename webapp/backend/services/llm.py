@@ -310,12 +310,31 @@ def _extract_location_kr(text: str) -> str | None:
     return normalize_location(text)
 
 
+# 순수 의도·명령 발화 패턴 — 이 패턴에 해당하면 title/location 추출을 건너뜀
+_INTENT_ONLY_RE = re.compile(
+    r"^(?:"
+    r"숙박\s*[을를이가]?\s*(?:등록|할|하고|올리)|"
+    r"민박\s*[을를이가]?\s*(?:등록|할|하고|올리)|"
+    r"(?:상품|물건|체험|농산물|특산물|숙박|민박)\s*[을를이가]?\s*(?:등록|올릴|팔|판매)|"
+    r"(?:등록|올리|판매|팔)\s*(?:할|하고|싶|할게)|"
+    r"(?:숙박|상품|체험|민박)\s*[을를이가]?\s*"
+    r"(?:등록할거야|올릴거야|팔거야|할거야|하고싶어|하려고|할건데|할래|하고싶은데)|"
+    r"(?:새로\s*)?등록\s*(?:할게|하려|시작|합니다|하겠)|"
+    r"(?:올려|올리고)\s*(?:싶어|싶은데|볼게|줘|드릴게)"
+    r")[요]?[.!?]?$",
+    re.IGNORECASE,
+)
+
+
 def _seller_rule_slots_from_blob(blob: str) -> dict:
     """Claude 없이 판매 슬롯 추출 — 농어촌 말투·짧은 문장 위주."""
     slots: dict = {}
     text = (blob or "").strip()
     if not text:
         return slots
+
+    # 순수 의도/등록 요청 발화인지 판별 — 이 경우 title/location 추출 생략
+    _is_intent_only = bool(_INTENT_ONLY_RE.match(re.sub(r"\s+", "", text)))
 
     if re.search(
         r"숙박|민박|펜션|하숙|숙소|하룻밤|방\s*빌려|방\s*내놓|숙박상품",
@@ -349,26 +368,32 @@ def _seller_rule_slots_from_blob(blob: str) -> dict:
     if price is not None:
         slots["price"] = price
 
-    loc = _extract_location_kr(text)
-    if loc:
-        slots["location"] = loc
+    # 의도 발화에서는 location 추출 건너뜀
+    if not _is_intent_only:
+        loc = _extract_location_kr(text)
+        if loc:
+            slots["location"] = loc
 
-    head = blob
-    head = re.split(
-        r"(?:올리고\s*싶(?:어|요)?|올릴게요?|등록\s*할게요?|팔아(?:요)?|판매\s*할게요?)",
-        head,
-        maxsplit=1,
-    )[0].strip()
-    head = re.sub(
-        r"\s*(\d+만\d{1,2}천원?|\d+만(?:원)?|\d+천(?:원)?|만원)(?:에)?\s*$",
-        "",
-        head,
-    )
-    head = re.sub(r"\s+", " ", head).strip()
-    if 2 <= len(head) <= 48:
-        slots["title"] = head
-    elif len(head) > 48:
-        slots["title"] = head[:45].rstrip() + "…"
+    # 의도 발화에서는 title 추출 건너뜀
+    if not _is_intent_only:
+        head = blob
+        head = re.split(
+            r"(?:올리고\s*싶(?:어|요)?|올릴게요?|등록\s*할게요?|팔아(?:요)?|판매\s*할게요?)",
+            head,
+            maxsplit=1,
+        )[0].strip()
+        head = re.sub(
+            r"\s*(\d+만\d{1,2}천원?|\d+만(?:원)?|\d+천(?:원)?|만원)(?:에)?\s*$",
+            "",
+            head,
+        )
+        head = re.sub(r"\s+", " ", head).strip()
+        # 명령·등록 관련 단어가 포함된 head는 title로 쓰지 않음
+        _cmd_words = re.compile(r"등록|올리|팔|판매|할거|하고싶|시작|하려|할게")
+        if 2 <= len(head) <= 48 and not _cmd_words.search(head):
+            slots["title"] = head
+        elif len(head) > 48:
+            slots["title"] = head[:45].rstrip() + "…"
 
     kind = slots.get("kind")
     loc_name = slots.get("location")
@@ -377,7 +402,7 @@ def _seller_rule_slots_from_blob(blob: str) -> dict:
     elif kind == "product" and loc_name and not slots.get("title"):
         slots["title"] = f"{loc_name} 상품"
 
-    if len(text) >= 8:
+    if len(text) >= 8 and not _is_intent_only:
         slots.setdefault(
             "description",
             text[:200] + ("…" if len(text) > 200 else ""),

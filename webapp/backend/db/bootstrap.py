@@ -91,6 +91,30 @@ def _ensure_sqlite_columns() -> None:
         if "stay_end" not in order_cols:
             conn.execute(text("ALTER TABLE orders ADD COLUMN stay_end VARCHAR(10)"))
 
+        # voice_logs 테이블 컬럼 방어
+        try:
+            vl_rows = conn.execute(text("PRAGMA table_info(voice_logs)")).fetchall()
+            vl_cols = {r[1] for r in vl_rows}
+            if vl_cols:  # 테이블이 존재할 때만
+                if "source" not in vl_cols:
+                    conn.execute(text("ALTER TABLE voice_logs ADD COLUMN source VARCHAR(20) DEFAULT 'asr'"))
+                if "audio_path" not in vl_cols:
+                    conn.execute(text("ALTER TABLE voice_logs ADD COLUMN audio_path VARCHAR(500)"))
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ocr_logs 테이블 컬럼 방어
+        try:
+            ol_rows = conn.execute(text("PRAGMA table_info(ocr_logs)")).fetchall()
+            ol_cols = {r[1] for r in ol_rows}
+            if ol_cols:  # 테이블이 존재할 때만
+                if "confidence" not in ol_cols:
+                    conn.execute(text("ALTER TABLE ocr_logs ADD COLUMN confidence FLOAT"))
+                if "image_paths" not in ol_cols:
+                    conn.execute(text("ALTER TABLE ocr_logs ADD COLUMN image_paths TEXT"))
+        except Exception:  # noqa: BLE001
+            pass
+
 
 def _seed_listings_if_empty() -> None:
     from services.listing_events import bump_listings_version

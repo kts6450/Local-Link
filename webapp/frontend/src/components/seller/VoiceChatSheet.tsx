@@ -17,7 +17,7 @@ export function VoiceChatSheet({ open, onToggle, step }: Props) {
   const sheetBottom =
     "bottom-[calc(5.75rem+env(safe-area-inset-bottom,0px))] sm:bottom-[calc(6.25rem+env(safe-area-inset-bottom,0px))]";
   const sheetAlign =
-    "mx-3 sm:mx-4 max-w-xl sm:max-w-2xl sm:ml-auto sm:mr-6 lg:mr-[max(1.5rem,calc(50vw-36rem))]";
+    "mx-3 sm:mx-4 max-w-3xl sm:mx-auto";
 
   return (
     <>

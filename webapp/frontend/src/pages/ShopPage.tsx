@@ -92,10 +92,8 @@ export function ShopPage() {
     !filters.minPrice &&
     !filters.maxPrice;
 
-  // 랜딩(기본)에서는 메인 그리드를 특산만 보여 준다 — 체험·스테이는 별도 섹션.
-  const gridFilters = isLandingView
-    ? { ...filters, kind: "product" as const, theme: "market" as const }
-    : filters;
+  // 전체 탭에서는 모든 상품(특산·스테이·체험)을 그리드에 표시한다.
+  const gridFilters = filters;
 
   const filtered = filterShopListings(listings, gridFilters);
   const title = sectionTitle(filters);
@@ -118,17 +116,14 @@ export function ShopPage() {
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8 sm:mb-10">
           <div>
             <p className="eyebrow mb-3">
-              {isLandingView ? "특산 SHOP" : "Discover Local"}
+              {isLandingView ? "전체 상품" : "Discover Local"}
             </p>
             <h2 className="display-2 text-balance">
-              {isLandingView ? "지역 특산품 둘러보기" : title}
+              {isLandingView ? "모든 상품 둘러보기" : title}
             </h2>
             {isLandingView ? (
               <p className="mt-3 text-base sm:text-lg text-hades-muted max-w-xl leading-relaxed">
-                전국 농어촌 판매자가 직접 올린 신선한 특산품만 모았습니다.
-                <br />
-                숙박은 <Link to="/?kind=lodging&theme=lodging" className="font-semibold text-brand-ink underline">스테이</Link>,
-                체험·클래스는 <Link to="/?kind=product&theme=experience" className="font-semibold text-brand-ink underline">체험</Link> 탭에서 확인하세요.
+                전국 농어촌 판매자가 직접 올린 신선한 특산품, 스테이, 체험 상품을 한눈에 확인하세요.
               </p>
             ) : null}
           </div>

@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { clsx } from "clsx";
+import { useEffect, useRef } from "react";
 
 import { ConversationView } from "../ConversationView";
 import { MicButton } from "../MicButton";
-import { VoiceChatSheet } from "./VoiceChatSheet";
 import { useSellerFormVoice } from "../../store/sellerFormVoice";
 import { useConversation, WELCOME_SELLER } from "../../store/conversation";
 
@@ -26,6 +24,103 @@ const TAB_HINT: Record<ListingTab, string> = {
   experience: "체험·투어·낚시",
 };
 
+/** 한 역할의 대화만 필터링해서 스크롤 표시 */
+function ChatColumn({
+  role,
+  label,
+  align,
+}: {
+  role: "assistant" | "user";
+  label: string;
+  align: "left" | "right";
+}) {
+  const history = useConversation((s) => s.history);
+  const phase = useConversation((s) => s.phase);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  const turns = history.filter((t) => t.role === role);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [history]);
+
+  const isAi = role === "assistant";
+
+  return (
+    <div className="flex-1 min-w-0 flex flex-col min-h-0">
+      {/* 헤더 */}
+      <div
+        className={`flex items-center gap-1.5 px-2 pb-1.5 shrink-0 ${
+          align === "right" ? "flex-row-reverse" : ""
+        }`}
+      >
+        <span
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-white text-[11px] font-bold shadow-sm ${
+            isAi
+              ? "bg-gradient-to-br from-shop-teal to-emerald-600"
+              : "bg-shop-teal"
+          }`}
+        >
+          {isAi ? "🌿" : "나"}
+        </span>
+        <p
+          className={`text-[11px] font-bold tracking-wide ${
+            isAi ? "text-shop-tealDark" : "text-slate-700"
+          }`}
+        >
+          {label}
+        </p>
+        {isAi && (phase === "thinking" || phase === "speaking") && (
+          <span className="ml-1 flex gap-0.5">
+            {[0, 1, 2].map((i) => (
+              <span
+                key={i}
+                className="inline-block h-1.5 w-1.5 rounded-full bg-shop-teal animate-bounce"
+                style={{ animationDelay: `${i * 0.15}s` }}
+              />
+            ))}
+          </span>
+        )}
+      </div>
+
+      {/* 스크롤 대화 영역 */}
+      <div
+        className={`flex-1 overflow-y-auto rounded-2xl border px-2.5 py-2 space-y-2 scroll-smooth ${
+          isAi
+            ? "border-emerald-200 bg-emerald-50/60"
+            : "border-slate-200 bg-slate-50/60"
+        }`}
+      >
+        {turns.length === 0 ? (
+          <p className="text-[11px] text-slate-400 text-center pt-2">
+            {isAi ? "말씀하시면 바로 도와드려요" : "마이크를 눌러 말씀하세요"}
+          </p>
+        ) : (
+          turns.map((t, idx) => (
+            <div key={idx}>
+              <p
+                className={`text-xs leading-relaxed whitespace-pre-wrap break-words ${
+                  isAi ? "text-slate-800" : "text-slate-900 text-right"
+                }`}
+              >
+                {t.content}
+              </p>
+              {idx < turns.length - 1 && (
+                <div
+                  className={`mt-1.5 border-t ${
+                    isAi ? "border-emerald-100" : "border-slate-200"
+                  }`}
+                />
+              )}
+            </div>
+          ))
+        )}
+        <div ref={endRef} className="h-px shrink-0" aria-hidden />
+      </div>
+    </div>
+  );
+}
+
 export function SellerVoicePanel({
   step,
   listingTab,
@@ -40,80 +135,32 @@ export function SellerVoicePanel({
   const setStartMode = useSellerFormVoice((s) => s.setStartMode);
   const isFormEmpty = useSellerFormVoice((s) => s.isFormEmpty);
   const snapshotForm = useSellerFormVoice((s) => s.snapshotForm);
-  const reset = useConversation((s) => s.reset);
   const appendAssistant = useConversation((s) => s.appendAssistant);
-  const historyLen = useConversation((s) => s.history.length);
-  const phase = useConversation((s) => s.phase);
-  const [chatOpen, setChatOpen] = useState(false);
-  const prevHistoryLen = useRef(historyLen);
 
   const hints = VOICE_BY_STEP[step] ?? VOICE_BY_STEP[1];
   const formEmpty = isFormEmpty();
-  const showChoice = !formEmpty && startMode === null;
 
+  // 폼 상태에 따라 자동으로 startMode 결정 — 선택 UI 없음
   useEffect(() => {
-    if (formEmpty && startMode === null) {
+    if (startMode !== null) return;
+    if (formEmpty) {
       setStartMode("fresh");
+    } else {
+      setStartMode("continue");
+      const f = snapshotForm();
+      const parts: string[] = [];
+      if (f.title) parts.push(`이름은 «${f.title}»`);
+      if (f.price) parts.push(`가격은 ${Number(f.price).toLocaleString("ko-KR")}원`);
+      if (f.location) parts.push(`지역은 ${f.location}`);
+      appendAssistant(
+        `네, 지금까지 채우신 내용으로 이어서 도와드릴게요. ${
+          parts.length > 0 ? parts.join(", ") + "로 알고 있습니다. " : ""
+        }더 고치실 게 있으면 말씀하시고, 없으시면 「이대로 올려 주세요」 라고 말씀하세요.`
+      );
     }
-  }, [formEmpty, startMode, setStartMode]);
+  }, [formEmpty, startMode, setStartMode, snapshotForm, appendAssistant]);
 
-  useEffect(() => {
-    if (historyLen > prevHistoryLen.current && historyLen > 1) {
-      setChatOpen(true);
-    }
-    prevHistoryLen.current = historyLen;
-  }, [historyLen]);
-
-  useEffect(() => {
-    if (phase === "thinking" || phase === "speaking") {
-      setChatOpen(true);
-    }
-  }, [phase]);
-
-  const handleContinue = () => {
-    setStartMode("continue");
-    const f = snapshotForm();
-    const parts: string[] = [];
-    if (f.title) parts.push(`이름은 «${f.title}»`);
-    if (f.price) parts.push(`가격은 ${Number(f.price).toLocaleString("ko-KR")}원`);
-    if (f.location) parts.push(`지역은 ${f.location}`);
-    appendAssistant(
-      `네, 지금까지 채우신 내용으로 이어서 도와드릴게요. ${
-        parts.length > 0 ? parts.join(", ") + "로 알고 있습니다. " : ""
-      }더 고치실 게 있으면 말씀하시고, 없으시면 「이대로 올려 주세요」 라고 말씀하세요.`
-    );
-  };
-
-  const handleFresh = () => {
-    setStartMode("fresh");
-    reset("seller");
-    appendAssistant("네, 처음부터 다시 시작할게요. " + WELCOME_SELLER);
-  };
-
-  const choiceBlock = showChoice ? (
-    <div className="rounded-xl border border-amber-200 bg-amber-50/95 px-3 py-2 mb-2">
-      <p className="text-xs font-semibold text-amber-900 mb-2">
-        화면에 채운 내용이 있어요. 어떻게 시작할까요?
-      </p>
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={handleContinue}
-          className="rounded-lg bg-shop-teal text-white text-xs font-semibold py-2 px-2 hover:brightness-110"
-        >
-          채운 내용으로 이어서
-        </button>
-        <button
-          type="button"
-          onClick={handleFresh}
-          className="rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-semibold py-2 px-2 hover:bg-slate-50"
-        >
-          처음부터 새로
-        </button>
-      </div>
-    </div>
-  ) : null;
-
+  // ── panel variant (사이드바용) ──────────────────────────────
   if (variant === "panel") {
     return (
       <div className="rounded-3xl border border-emerald-200/80 bg-gradient-to-b from-emerald-50/90 to-white p-5 sm:p-6 shadow-sm">
@@ -129,46 +176,19 @@ export function SellerVoicePanel({
           </div>
         </div>
 
-        {showChoice ? (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4 mb-4">
-            <p className="text-sm font-semibold text-amber-900 mb-1">어떻게 시작할까요?</p>
-            <p className="text-xs text-amber-800/90 mb-3">
-              화면에 이미 채우신 내용이 있어요.
-              <br />
-              그대로 이어서 도와드릴까요, 아니면 처음부터 다시 시작할까요?
-            </p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={handleContinue}
-                className="rounded-xl bg-shop-teal text-white font-semibold py-3 px-3 hover:brightness-110"
+        <div className="rounded-2xl border border-emerald-100 bg-white/80 p-4 mb-4">
+          <p className="text-sm font-semibold text-emerald-900 mb-2">이렇게 말해 보세요</p>
+          <ul className="space-y-1.5">
+            {hints.map((h) => (
+              <li
+                key={h}
+                className="text-sm text-slate-700 pl-3 border-l-2 border-emerald-300"
               >
-                📝 채운 내용으로 이어서
-              </button>
-              <button
-                type="button"
-                onClick={handleFresh}
-                className="rounded-xl bg-white border border-slate-300 text-slate-700 font-semibold py-3 px-3 hover:bg-slate-50"
-              >
-                🔄 처음부터 새로
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-2xl border border-emerald-100 bg-white/80 p-4 mb-4">
-            <p className="text-sm font-semibold text-emerald-900 mb-2">이렇게 말해 보세요</p>
-            <ul className="space-y-1.5">
-              {hints.map((h) => (
-                <li
-                  key={h}
-                  className="text-sm text-slate-700 pl-3 border-l-2 border-emerald-300"
-                >
-                  「{h}」
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+                「{h}」
+              </li>
+            ))}
+          </ul>
+        </div>
 
         <MicButton />
 
@@ -184,58 +204,32 @@ export function SellerVoicePanel({
     );
   }
 
+  // ── dock variant (하단 고정 바) ──────────────────────────────
   return (
-    <>
-      <VoiceChatSheet open={chatOpen} onToggle={() => setChatOpen((v) => !v)} step={step} />
+    <div className="fixed inset-x-0 bottom-0 z-50 border-t border-emerald-200/80 bg-gradient-to-t from-white via-white/98 to-emerald-50/30 backdrop-blur-md shadow-[0_-8px_32px_rgba(16,185,129,0.1)]">
+      <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
 
-      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-emerald-200/80 bg-gradient-to-t from-white via-white/98 to-emerald-50/30 backdrop-blur-md shadow-[0_-8px_32px_rgba(16,185,129,0.1)]">
-        <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          {choiceBlock}
+        {/* 3-컬럼: [AI 대화창] [마이크] [나의 대화] */}
+        <div className="flex items-stretch gap-3" style={{ height: "180px" }}>
 
-          <div className="flex items-end gap-2 sm:gap-4">
-            <div className="hidden sm:block min-w-[6.5rem] shrink-0 pb-1">
-              <p className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                <span className="text-base" aria-hidden>
-                  🎙️
-                </span>
-                말로 하기
-              </p>
-              <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
-                {TAB_HINT[listingTab]}
-              </p>
-            </div>
+          {/* 왼쪽 — 로컬링크 AI */}
+          <ChatColumn role="assistant" label="로컬링크 AI" align="left" />
 
-            <div className="flex-1 flex justify-center min-w-0">
-              <MicButton compact />
-            </div>
-
-            <div className="flex flex-col items-end gap-1.5 shrink-0 pb-1 min-w-[5rem] sm:min-w-[6.5rem]">
-              <button
-                type="button"
-                onClick={() => setChatOpen((v) => !v)}
-                className={clsx(
-                  "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
-                  chatOpen
-                    ? "bg-shop-teal text-white"
-                    : "bg-emerald-50 text-shop-tealDark border border-emerald-200 hover:bg-emerald-100"
-                )}
-              >
-                <span aria-hidden>💬</span>
-                {chatOpen ? "대화 접기" : historyLen > 1 ? "대화 펼치기" : "대화"}
-              </button>
-              {lastAction ? (
-                <span className="text-[10px] text-emerald-700 text-right leading-tight">
-                  {lastAction === "ai_write" ? "✨ AI 글 적용됨" : "🖼️ AI 사진 실행"}
-                </span>
-              ) : (
-                <span className="text-[10px] text-slate-400 text-right leading-tight hidden sm:block max-w-[8rem] truncate">
-                  「{hints[0]}」
-                </span>
-              )}
-            </div>
+          {/* 가운데 — 마이크 */}
+          <div className="flex flex-col items-center justify-center shrink-0 gap-2 pb-1">
+            <MicButton compact />
+            {lastAction && (
+              <span className="text-[10px] text-emerald-700 font-medium text-center leading-tight">
+                {lastAction === "ai_write" ? "✨ AI 글\n적용됨" : "🖼️ AI 사진\n실행"}
+              </span>
+            )}
           </div>
+
+          {/* 오른쪽 — 나의 대화 */}
+          <ChatColumn role="user" label="나의 대화" align="right" />
+
         </div>
       </div>
-    </>
+    </div>
   );
 }

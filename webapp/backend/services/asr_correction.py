@@ -217,9 +217,20 @@ def apply_rule_corrections(text: str) -> tuple[str, list[str]]:
     return out, fixes
 
 
+# 의도/명령 발화가 location으로 잘못 추출되는 것을 막기 위한 필터
+_LOCATION_REJECT_RE = re.compile(
+    r"등록|올리|팔|판매|하고\s*싶|할\s*거|할게|하려|시작|만들어|써줘|그려|사진|소개|도와|체험\s*할|상품\s*할",
+    re.IGNORECASE,
+)
+
+
 def normalize_location(location: str | None) -> str | None:
     loc = (location or "").strip()
     if not loc:
+        return None
+
+    # 등록·명령 동사가 포함된 문구는 지명이 아님 — 즉시 거부
+    if _LOCATION_REJECT_RE.search(loc):
         return None
 
     for typo, canonical in _PLACE_TYPO_MAP.items():
@@ -251,6 +262,10 @@ def normalize_slots_locations(slots: dict) -> dict:
         fixed = normalize_location(loc)
         if fixed:
             slots = {**slots, "location": fixed}
+        else:
+            # normalize_location이 None을 반환하면 (의도 발화·부적절한 문자열)
+            # location 키 자체를 제거하여 폼에 잘못 반영되는 것을 방지
+            slots = {k: v for k, v in slots.items() if k != "location"}
     return slots
 
 
@@ -407,6 +422,7 @@ def correct_asr_text(
     *,
     mode: str = "consumer",
     history: list[dict] | None = None,
+    rules_only: bool = False,
 ) -> CorrectionResult:
     raw = (raw or "").strip()
     if not raw:
@@ -417,12 +433,12 @@ def correct_asr_text(
     rule_text, rule_fixes = apply_rule_corrections(raw)
 
     pipe = correction_mode()
-    if pipe == "off":
+    if rules_only or pipe == "off":
         return CorrectionResult(
             raw=raw,
-            text=raw,
-            rule_fixes=[],
-            pipeline="off",
+            text=rule_text if rules_only else raw,
+            rule_fixes=rule_fixes,
+            pipeline="rules" if rules_only else "off",
         )
 
     if pipe == "rules" or not _anthropic_configured():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
@@ -94,3 +94,41 @@ class ReviewSummaryRow(Base):
     summary: Mapped[str] = mapped_column(Text)
     hash: Mapped[str] = mapped_column(String(64))
     updated_at: Mapped[str] = mapped_column(String(40))
+
+
+class VoiceLogRow(Base):
+    """판매자 음성 등록 로그 — ASR 오디오 + 인식 텍스트."""
+
+    __tablename__ = "voice_logs"
+
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(48), index=True, nullable=True)
+    seller_id: Mapped[str | None] = mapped_column(String(80), index=True, nullable=True)
+    # asr | turn  — 호출된 엔드포인트 종류
+    source: Mapped[str] = mapped_column(String(20), default="asr")
+    # 오디오 파일 저장 경로 (data/runtime/voice_logs/<id>.wav)
+    audio_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # ASR 모델 원문
+    raw_text: Mapped[str] = mapped_column(Text, default="")
+    # 보정 후 최종 텍스트
+    corrected_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String(40), index=True)
+
+
+class OcrLogRow(Base):
+    """판매자 OCR 등록 로그 — 원본 이미지 + OCR 텍스트 + 파싱 결과."""
+
+    __tablename__ = "ocr_logs"
+
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(48), index=True, nullable=True)
+    seller_id: Mapped[str | None] = mapped_column(String(80), index=True, nullable=True)
+    # 이미지 파일 저장 경로 (data/runtime/ocr_logs/<id>_<n>.jpg, ','로 구분)
+    image_paths: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Clova/Claude가 추출한 원문 텍스트
+    ocr_raw_text: Mapped[str] = mapped_column(Text, default="")
+    # LLM이 구조화한 등록 초안 JSON
+    parsed_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # OCR 신뢰도 (0~1)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), index=True)

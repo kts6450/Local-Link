@@ -133,15 +133,15 @@ export function useVoiceSession() {
             const descTask =
               !description || description.length < 12
                 ? api
-                    .draftListingPackage({
-                      kind,
-                      title,
-                      price: Math.round(price),
-                      location,
-                      category,
-                    })
-                    .then((r) => ({ description: r.description, guide: r.guide }))
-                    .catch(() => ({ description, guide: null }))
+                  .draftListingPackage({
+                    kind,
+                    title,
+                    price: Math.round(price),
+                    location,
+                    category,
+                  })
+                  .then((r) => ({ description: r.description, guide: r.guide }))
+                  .catch(() => ({ description, guide: null }))
                 : Promise.resolve({ description, guide: null });
 
             const { description: finalDesc, guide } = await descTask;
@@ -270,13 +270,23 @@ function playTTS(url: string, ref: MutableRefObject<HTMLAudioElement | null>) {
     ref.current.pause();
   }
   const audio = new Audio(url);
+  // 말하는 속도를 1.1배속으로 설정 (1.2배속은 조금 빨라 미세 조정)
+  audio.defaultPlaybackRate = 1.1;
+  audio.playbackRate = 1.1;
   ref.current = audio;
+
   audio.addEventListener("ended", () => {
     useConversation.getState().setPhase("idle");
   });
   audio.addEventListener("error", () => {
     useConversation.getState().setPhase("idle");
   });
+
+  // 브라우저가 오디오를 로드할 때 재생 속도가 1.0으로 초기화되는 현상을 방지하기 위해 이벤트 리스너로 이중 설정
+  audio.addEventListener("canplaythrough", () => {
+    audio.playbackRate = 1.1;
+  });
+
   audio.play().catch(() => {
     useConversation.getState().setPhase("idle");
   });
